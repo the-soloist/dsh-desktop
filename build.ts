@@ -177,6 +177,10 @@ async function buildGoBinary(
   environment: Record<string, string> = {},
   packageName = applicationPackage,
 ): Promise<void> {
+  const linkerFlags = ["-s", "-w"];
+  if (platform === "windows") {
+    linkerFlags.push("-H=windowsgui");
+  }
   await run(
     "go",
     [
@@ -185,7 +189,7 @@ async function buildGoBinary(
       "production",
       "-trimpath",
       "-buildvcs=false",
-      "-ldflags=-s -w",
+      `-ldflags=${linkerFlags.join(" ")}`,
       "-o",
       output,
       packageName,

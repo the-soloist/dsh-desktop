@@ -5,6 +5,7 @@ package desktop
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,13 +17,18 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-const createNewProcessGroup = 0x00000200
+const (
+	createNewProcessGroup = 0x00000200
+	createNoWindow        = 0x08000000
+	attachParentProcess   = ^uint32(0)
+)
 
 var (
 	kernel32                  = windows.NewLazySystemDLL("kernel32.dll")
 	user32                    = windows.NewLazySystemDLL("user32.dll")
 	getConsoleWindow          = kernel32.NewProc("GetConsoleWindow")
 	getConsoleProcessList     = kernel32.NewProc("GetConsoleProcessList")
+	attachConsole             = kernel32.NewProc("AttachConsole")
 	showWindow                = user32.NewProc("ShowWindow")
 	messageBox                = user32.NewProc("MessageBoxW")
 	startupConsoleWindow      uintptr
@@ -49,7 +55,10 @@ func quoteCommandPromptArgument(value string) string {
 }
 
 func configureChildProcess(command *exec.Cmd) {
-	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNewProcessGroup}
+	command.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: createNewProcessGroup | createNoWindow,
+		HideWindow:    true,
+	}
 }
 
 func terminateProcessTree(processID int, force bool) error {
@@ -60,6 +69,10 @@ func terminateProcessTree(processID int, force bool) error {
 	command := exec.Command("taskkill.exe", arguments...)
 	command.Stdout = os.Stdout
 	command.Stderr = os.Stderr
+	command.SysProcAttr = &syscall.SysProcAttr{
+		CreationFlags: createNoWindow,
+		HideWindow:    true,
+	}
 	if err := command.Run(); err != nil {
 		if _, lookupErr := os.FindProcess(processID); lookupErr != nil {
 			return nil
@@ -73,8 +86,13 @@ func ownsStartupConsole() bool {
 	window, _, _ := getConsoleWindow.Call()
 	startupConsoleWindow = window
 	if window == 0 {
+		attached, _, _ := attachConsole.Call(uintptr(attachParentProcess))
+		if attached != 0 {
+			connectConsoleOutput()
+		}
 		return false
 	}
+	connectConsoleOutput()
 	processes := make([]uint32, 2)
 	count, _, _ := getConsoleProcessList.Call(
 		uintptr(unsafePointer(&processes[0])),
@@ -82,6 +100,20 @@ func ownsStartupConsole() bool {
 	)
 	startupConsoleWindowOwned = count == 1
 	return startupConsoleWindowOwned
+}
+
+func connectConsoleOutput() {
+	if _, err := os.Stdout.Stat(); err == nil {
+		log.SetOutput(os.Stdout)
+		return
+	}
+	console, err := os.OpenFile("CONOUT$", os.O_WRONLY, 0)
+	if err != nil {
+		return
+	}
+	os.Stdout = console
+	os.Stderr = console
+	log.SetOutput(console)
 }
 
 func hideStartupConsole() {
