@@ -1,4 +1,4 @@
-import { chmod, mkdir, rm } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import type { BuildContext } from "./config";
 import { run } from "./command";
@@ -62,29 +62,48 @@ export async function runSmokeTest(
   console.log("Running startup smoke test");
   // GTK parses application arguments before Wails starts and rejects unknown
   // options, so packaged GUI smoke mode is enabled exclusively via env vars.
+  const launcherLog = path.join(context.intermediate, "smoke-launcher.log");
   const smokeEnvironment = {
     DSH_SMOKE_TEST: "1",
     DSH_SMOKE_TEST_SECONDS: "5",
-    DSH_LAUNCHER_LOG: path.join(context.intermediate, "smoke-launcher.log"),
+    DSH_LAUNCHER_LOG: launcherLog,
     ...environment,
   };
-  if (context.platform === "linux") {
-    const xvfbRun = Bun.which("xvfb-run");
-    if (!xvfbRun) {
-      throw new Error("xvfb-run was not found; it is required for the Linux smoke test");
+  try {
+    if (context.platform === "linux") {
+      const xvfbRun = Bun.which("xvfb-run");
+      if (!xvfbRun) {
+        throw new Error("xvfb-run was not found; it is required for the Linux smoke test");
+      }
+      await run(xvfbRun, ["-a", "--", executable], {
+        env: {
+          ...smokeEnvironment,
+          // GitHub-hosted runners do not permit WebKitGTK's bubblewrap process
+          // to create a user namespace. Limit this override to the disposable
+          // headless smoke test; normal application launches keep the sandbox.
+          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: "1",
+        },
+      });
+      return;
     }
-    await run(xvfbRun, ["-a", "--", executable], {
-      env: {
-        ...smokeEnvironment,
-        // GitHub-hosted runners do not permit WebKitGTK's bubblewrap process
-        // to create a user namespace. Limit this override to the disposable
-        // headless smoke test; normal application launches keep the sandbox.
-        WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: "1",
-      },
-    });
-    return;
+    await run(executable, [], { env: smokeEnvironment });
+  } catch (error) {
+    throw await smokeTestError(error, launcherLog);
   }
-  await run(executable, [], { env: smokeEnvironment });
+}
+
+async function smokeTestError(error: unknown, launcherLog: string): Promise<Error> {
+  const message = error instanceof Error ? error.message : String(error);
+  try {
+    const output = (await readFile(launcherLog, "utf8")).trim();
+    if (output !== "") {
+      return new Error(`${message}\n\nLauncher log:\n${output.slice(-12_000)}`);
+    }
+  } catch {
+    // Preserve the original failure when the application exited before the
+    // launcher could initialise its log file.
+  }
+  return error instanceof Error ? error : new Error(message);
 }
 
 async function resetDirectory(context: BuildContext, directory: string): Promise<void> {
