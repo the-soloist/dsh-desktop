@@ -1,0 +1,9 @@
+/target/
+/dist/
+*.dmg
+*.AppImage
+*.msi
+*.7z
+DshDesktop-binary
+DshDesktop.exe
+DshDesktop.app/
