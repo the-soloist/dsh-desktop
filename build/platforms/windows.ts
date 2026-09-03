@@ -34,6 +34,9 @@ export async function buildWindows(context: BuildContext): Promise<void> {
   await buildGoBinary(context, executable, { CGO_ENABLED: "0" }, "./dist/intermediate/windows/windows-source");
   await createAndVerifyArchive(context.archivePath, packageDirectory, executableName);
   if (context.smokeTest) {
-    await runSmokeTest(context, executable);
+    // GitHub-hosted Windows runners have no interactive desktop session.
+    // Exercise the packaged executable, environment resolution, DSH startup,
+    // readiness check, and process-tree cleanup without creating a WebView.
+    await runSmokeTest(context, executable, { DSH_HEADLESS_SMOKE_TEST: "1" });
   }
 }

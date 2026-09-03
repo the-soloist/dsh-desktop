@@ -112,3 +112,10 @@ func TestSmokeTestEnabledUsesEnvironment(t *testing.T) {
 		t.Fatal("smokeTestEnabled() = false, want true")
 	}
 }
+
+func TestHeadlessSmokeTestEnabledUsesEnvironment(t *testing.T) {
+	t.Setenv("DSH_HEADLESS_SMOKE_TEST", "1")
+	if !headlessSmokeTestEnabled() {
+		t.Fatal("headlessSmokeTestEnabled() = false, want true")
+	}
+}

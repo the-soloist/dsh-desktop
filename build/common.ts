@@ -65,6 +65,7 @@ export async function runSmokeTest(
   const smokeEnvironment = {
     DSH_SMOKE_TEST: "1",
     DSH_SMOKE_TEST_SECONDS: "5",
+    DSH_LAUNCHER_LOG: path.join(context.intermediate, "smoke-launcher.log"),
     ...environment,
   };
   if (context.platform === "linux") {

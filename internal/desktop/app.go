@@ -33,9 +33,19 @@ const (
 // Main starts the desktop application and reports fatal startup errors using a
 // platform-native warning dialog.
 func Main() {
+	if headlessSmokeTestEnabled() {
+		if err := runHeadlessSmokeTest(); err != nil {
+			log.Printf("headless smoke test failed: %s", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		message := err.Error()
 		log.Printf("fatal: %s", message)
+		if smokeTestEnabled() {
+			os.Exit(1)
+		}
 		title := "Application"
 		if metadata, metadataErr := dshdesktop.CurrentMetadata(); metadataErr == nil {
 			title = metadata.DisplayName
@@ -128,6 +138,11 @@ func smokeTestEnabled() bool {
 		}
 	}
 	return false
+}
+
+func headlessSmokeTestEnabled() bool {
+	value := strings.TrimSpace(os.Getenv("DSH_HEADLESS_SMOKE_TEST"))
+	return value == "1" || strings.EqualFold(value, "true")
 }
 
 func smokeTestDuration() time.Duration {
