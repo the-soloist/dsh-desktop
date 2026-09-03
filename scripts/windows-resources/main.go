@@ -13,19 +13,24 @@ import (
 )
 
 func main() {
+	metadata, err := dshdesktop.CurrentMetadata()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	input := flag.String("input", "internal/appicon/dsh-desktop-icon.png", "source PNG")
-	icoOutput := flag.String("ico", "dist/intermediate/windows/DSH Desktop.ico", "ICO output")
+	icoOutput := flag.String("ico", filepath.Join("dist", "intermediate", "windows", metadata.DisplayName+".ico"), "ICO output")
 	resourceOutput := flag.String("syso", "dist/intermediate/windows/rsrc_windows_amd64.syso", "COFF resource output")
 	architecture := flag.String("arch", "amd64", "target architecture")
 	flag.Parse()
 
-	if err := generateResources(*input, *icoOutput, *resourceOutput, *architecture); err != nil {
+	if err := generateResources(*input, *icoOutput, *resourceOutput, *architecture, metadata); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func generateResources(inputPath, icoPath, resourcePath, architecture string) error {
+func generateResources(inputPath, icoPath, resourcePath, architecture string, metadata dshdesktop.Metadata) error {
 	applicationVersion, err := dshdesktop.CurrentVersion()
 	if err != nil {
 		return fmt.Errorf("parse embedded VERSION: %w", err)
@@ -67,7 +72,7 @@ func generateResources(inputPath, icoPath, resourcePath, architecture string) er
 		return fmt.Errorf("add icon resource: %w", err)
 	}
 	resourceSet.SetManifest(winres.AppManifest{
-		Description:         "Desktop client for DeepSeek DSH",
+		Description:         metadata.Description,
 		Compatibility:       winres.Win10AndAbove,
 		ExecutionLevel:      winres.AsInvoker,
 		DPIAwareness:        winres.DPIPerMonitorV2,
@@ -84,9 +89,9 @@ func generateResources(inputPath, icoPath, resourcePath, architecture string) er
 		FileVersion:    resourceVersion,
 		ProductVersion: resourceVersion,
 	}
-	versionInfo.Set(0, version.ProductName, "DSH Desktop")
-	versionInfo.Set(0, version.FileDescription, "Desktop client for DeepSeek DSH")
-	versionInfo.Set(0, version.OriginalFilename, "DSH Desktop.exe")
+	versionInfo.Set(0, version.ProductName, metadata.DisplayName)
+	versionInfo.Set(0, version.FileDescription, metadata.Description)
+	versionInfo.Set(0, version.OriginalFilename, metadata.DisplayName+".exe")
 	resourceSet.SetVersionInfo(versionInfo)
 
 	arch, ok := map[string]winres.Arch{
