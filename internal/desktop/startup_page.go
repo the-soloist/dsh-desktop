@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -85,13 +86,23 @@ func (timeline *startupTimeline) snapshot() startupUpdate {
 	return startupUpdate{Reset: true, Steps: steps}
 }
 
-func startupAssetHandler() http.Handler {
+func startupAssetHandler(applicationName string) http.Handler {
 	frontend, err := fs.Sub(startupAssets, "startup")
 	if err != nil {
 		panic(fmt.Errorf("cannot prepare startup assets: %w", err))
 	}
 	assets := application.BundledAssetFileServer(frontend)
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/" || request.URL.Path == "/index.html" {
+			page, readErr := fs.ReadFile(frontend, "index.html")
+			if readErr != nil {
+				http.Error(response, "startup page unavailable", http.StatusInternalServerError)
+				return
+			}
+			response.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = response.Write([]byte(strings.ReplaceAll(string(page), "{{APPLICATION_NAME}}", applicationName)))
+			return
+		}
 		if request.URL.Path == "/logo.png" {
 			response.Header().Set("Content-Type", "image/png")
 			response.Header().Set("Cache-Control", "public, max-age=31536000, immutable")

@@ -65,7 +65,7 @@ func (recorder *startupOutputRecorder) recentOutput() string {
 	return strings.Join(recent, "\n")
 }
 
-func dshOutputSummary(line string) (key, status, detail string, ok bool) {
+func dshOutputSummary(line, dshURL string) (key, status, detail string, ok bool) {
 	normalised := strings.ToLower(strings.TrimSpace(line))
 	switch {
 	case strings.Contains(normalised, "resolving dependencies"):
@@ -73,7 +73,7 @@ func dshOutputSummary(line string) (key, status, detail string, ok bool) {
 	case strings.HasPrefix(normalised, "resolved"):
 		return "dependencies-ready", "DSH 依赖已就绪", "运行依赖已经准备完成。", true
 	case strings.Contains(normalised, "dsh web:"):
-		return "web-listening", "DSH Web 服务已启动", "本地服务已开始监听 127.0.0.1:3080。", true
+		return "web-listening", "DSH Web 服务已启动", "本地服务已开始监听 " + dshURL + "。", true
 	default:
 		return "", "", "", false
 	}

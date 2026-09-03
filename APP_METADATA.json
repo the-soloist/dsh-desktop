@@ -1,0 +1,10 @@
+{
+  "displayName": "DSH Desktop",
+  "internalName": "DshDesktop",
+  "description": "Desktop client for DeepSeek DSH",
+  "bundleIdentifier": "io.github.the-soloist.dsh-desktop",
+  "linuxDesktopId": "dshdesktop",
+  "dshPackage": "@deepseek-ai/dsh@latest",
+  "dshURL": "http://127.0.0.1:3080",
+  "dshPageMarker": "DeepSeek Harness"
+}
