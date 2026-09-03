@@ -1,315 +1,325 @@
-import { constants, existsSync } from "node:fs";
 import {
-  access,
   chmod,
   copyFile,
   mkdir,
-  readdir,
-  rename,
   rm,
+  symlink,
+  writeFile,
 } from "node:fs/promises";
 import path from "node:path";
+import process from "node:process";
 
-const projectDir = import.meta.dir;
-const distDir = path.join(projectDir, "dist");
-const platform = process.platform;
-const platformName =
-  platform === "darwin" ? "macos" : platform === "win32" ? "windows" : "linux";
-const architecture = process.arch === "x64" ? "x86_64" : process.arch;
-const intermediateDir = path.join(distDir, "intermediate", platformName);
-const finalDir = path.join(distDir, platformName);
-const archiveName = `DshDesktop-${platformName}-${architecture}.7z`;
-const packageOnly = process.argv.includes("--package-only");
-const smokeTest = process.argv.includes("--smoke-test");
+const repositoryRoot = import.meta.dir;
+const distRoot = path.join(repositoryRoot, "dist");
+const smokeTest = process.argv.slice(2).includes("--smoke-test");
+const unknownArguments = process.argv
+  .slice(2)
+  .filter((argument) => argument !== "--smoke-test");
 
-if (!["darwin", "linux", "win32"].includes(platform)) {
-  throw new Error(`Unsupported platform: ${platform}`);
-}
-if (!["x64", "arm64"].includes(process.arch)) {
-  throw new Error(`Unsupported architecture: ${process.arch}`);
-}
-if (platform !== "darwin" && process.arch !== "x64") {
-  throw new Error(`Unsupported target: ${platform}/${process.arch}; only macOS supports arm64`);
+if (unknownArguments.length > 0) {
+  throw new Error(`Unknown build arguments: ${unknownArguments.join(", ")}`);
 }
 
-await mkdir(distDir, { recursive: true });
+type PlatformName = "macos" | "linux" | "windows";
 
-if (!packageOnly) {
-  await resetDirectory(intermediateDir);
-  await buildPake();
-} else if (!existsSync(intermediateDir)) {
-  throw new Error(`Intermediate directory does not exist: ${intermediateDir}`);
+const platform = resolvePlatform();
+const architecture = resolveArchitecture();
+validateNativeTarget(platform, architecture);
+
+const platformOutput = path.join(distRoot, platform);
+const intermediate = path.join(distRoot, "intermediate", platform);
+const archiveName = `DshDesktop-${platform}-${architecture}.7z`;
+const archivePath = path.join(platformOutput, archiveName);
+
+await mkdir(distRoot, { recursive: true });
+await resetDirectory(intermediate);
+await resetDirectory(platformOutput);
+
+console.log(`Building DshDesktop for ${platform}/${architecture}`);
+
+switch (platform) {
+  case "macos":
+    await buildMacOS();
+    break;
+  case "linux":
+    await buildLinux();
+    break;
+  case "windows":
+    await buildWindows();
+    break;
 }
 
-const launcherBinary = await buildLauncher();
-await resetDirectory(finalDir);
+console.log(`Package ready: ${path.relative(repositoryRoot, archivePath)}`);
 
-let finalApplication: string;
-if (platform === "darwin") {
-  finalApplication = await packageMacos(launcherBinary);
-} else if (platform === "linux") {
-  finalApplication = await packageLinux(launcherBinary);
-} else {
-  finalApplication = await packageWindows(launcherBinary);
-}
+async function buildMacOS(): Promise<void> {
+  const binary = path.join(intermediate, "DshDesktop-binary");
+  const applicationBundle = path.join(platformOutput, "DshDesktop.app");
+  const contents = path.join(applicationBundle, "Contents");
+  const macOSDirectory = path.join(contents, "MacOS");
+  const resourcesDirectory = path.join(contents, "Resources");
+  const packagedBinary = path.join(macOSDirectory, "DshDesktop");
 
-console.log(`\nBuild complete: ${finalApplication}`);
+  await buildGoBinary(binary, {
+    CGO_ENABLED: "1",
+    CGO_CFLAGS: "-mmacosx-version-min=13.0",
+    CGO_LDFLAGS: "-mmacosx-version-min=13.0",
+    MACOSX_DEPLOYMENT_TARGET: "13.0",
+  });
+  await mkdir(macOSDirectory, { recursive: true });
+  await mkdir(resourcesDirectory, { recursive: true });
+  await copyFile(binary, packagedBinary);
+  await chmod(packagedBinary, 0o755);
+  await writeFile(path.join(contents, "Info.plist"), macOSInfoPlist(), "utf8");
 
-if (smokeTest) {
-  await runSmokeTest(finalApplication);
-}
+  await run("codesign", ["--force", "--deep", "--sign", "-", applicationBundle]);
+  await run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", applicationBundle]);
+  await createAndVerifyArchive(archivePath, platformOutput, "DshDesktop.app");
 
-async function buildPake(): Promise<void> {
-  const bunx = await findExecutable(
-    platform === "win32" ? ["bunx.exe", "bunx.cmd", "bunx.bat"] : ["bunx"],
-  );
-  if (!bunx) {
-    throw new Error("bunx was not found; it is required to run pake-cli");
+  if (smokeTest) {
+    await runSmokeTest(packagedBinary);
   }
+}
 
-  const target =
-    platform === "darwin"
-      ? "app"
-      : platform === "linux"
-        ? "appimage"
-        : "x64";
-  const pakeTargetDir = path.join(intermediateDir, "pake-target");
+async function buildLinux(): Promise<void> {
+  const appDir = path.join(intermediate, "DshDesktop.AppDir");
+  const binaryDirectory = path.join(appDir, "usr", "bin");
+  const binary = path.join(binaryDirectory, "DshDesktop");
+  const desktopFile = "dshdesktop.desktop";
+  const iconFile = "dshdesktop.svg";
+  const appImage = path.join(platformOutput, "DshDesktop.AppImage");
 
+  await mkdir(binaryDirectory, { recursive: true });
+  await buildGoBinary(binary, { CGO_ENABLED: "1" });
+  await chmod(binary, 0o755);
+  await symlink("usr/bin/DshDesktop", path.join(appDir, "AppRun"));
+  await writeFile(path.join(appDir, desktopFile), linuxDesktopEntry(), "utf8");
+  await writeFile(path.join(appDir, iconFile), applicationIconSVG(), "utf8");
+
+  const applicationsDirectory = path.join(appDir, "usr", "share", "applications");
+  const iconsDirectory = path.join(
+    appDir,
+    "usr",
+    "share",
+    "icons",
+    "hicolor",
+    "scalable",
+    "apps",
+  );
+  await mkdir(applicationsDirectory, { recursive: true });
+  await mkdir(iconsDirectory, { recursive: true });
+  await copyFile(path.join(appDir, desktopFile), path.join(applicationsDirectory, desktopFile));
+  await copyFile(path.join(appDir, iconFile), path.join(iconsDirectory, iconFile));
+
+  const appImageTool = process.env.APPIMAGETOOL || Bun.which("appimagetool");
+  if (!appImageTool) {
+    throw new Error("appimagetool was not found; set APPIMAGETOOL to its absolute path");
+  }
+  await chmod(appImageTool, 0o755);
+  await run(appImageTool, [appDir, appImage], {
+    env: { APPIMAGE_EXTRACT_AND_RUN: "1", ARCH: "x86_64" },
+  });
+  await chmod(appImage, 0o755);
+  await run("file", [appImage]);
+  await createAndVerifyArchive(archivePath, platformOutput, "DshDesktop.AppImage");
+
+  if (smokeTest) {
+    await runSmokeTest(appImage, { APPIMAGE_EXTRACT_AND_RUN: "1" });
+  }
+}
+
+async function buildWindows(): Promise<void> {
+  const packageDirectory = path.join(intermediate, "package");
+  const executable = path.join(packageDirectory, "DshDesktop.exe");
+
+  await mkdir(packageDirectory, { recursive: true });
+  await buildGoBinary(executable);
+  await createAndVerifyArchive(archivePath, packageDirectory, "DshDesktop.exe");
+
+  if (smokeTest) {
+    await runSmokeTest(executable);
+  }
+}
+
+async function buildGoBinary(
+  output: string,
+  environment: Record<string, string> = {},
+): Promise<void> {
   await run(
+    "go",
     [
-      bunx,
-      "pake-cli",
-      "--config",
-      path.join(projectDir, "pake.json"),
-      "--targets",
-      target,
-      "--keep-binary",
+      "build",
+      "-tags",
+      "production",
+      "-trimpath",
+      "-buildvcs=false",
+      "-ldflags=-s -w",
+      "-o",
+      output,
+      ".",
     ],
     {
-      cwd: intermediateDir,
-      env: { CARGO_TARGET_DIR: pakeTargetDir },
+      env: {
+        GOCACHE: path.join(intermediate, "go-cache"),
+        GOTELEMETRY: "off",
+        ...environment,
+      },
     },
   );
 }
 
-async function buildLauncher(): Promise<string> {
-  const launcherTargetDir = path.join(intermediateDir, "launcher-target");
-  await run(["cargo", "build", "--release"], {
-    cwd: projectDir,
-    env: { CARGO_TARGET_DIR: launcherTargetDir },
-  });
-
-  const executableName =
-    platform === "win32" ? "dsh-desktop-launcher.exe" : "dsh-desktop-launcher";
-  const executable = path.join(launcherTargetDir, "release", executableName);
-  await requireFile(executable, "Rust launcher");
-  return executable;
-}
-
-async function packageMacos(launcherBinary: string): Promise<string> {
-  const sourceApp = path.join(intermediateDir, "DshDesktop.app");
-  if (!existsSync(sourceApp)) {
-    throw new Error(`Pake .app was not found: ${sourceApp}`);
-  }
-
-  const stagingDir = path.join(intermediateDir, "package");
-  await resetDirectory(stagingDir);
-  const stagingApp = path.join(stagingDir, "DshDesktop.app");
-  await run(["/usr/bin/ditto", sourceApp, stagingApp]);
-
-  const executableDir = path.join(stagingApp, "Contents", "MacOS");
-  const pakeBinary = path.join(executableDir, "pake-dshdesktop");
-  const realPakeBinary = path.join(executableDir, "pake-dshdesktop-real");
-  await requireFile(pakeBinary, "Pake executable");
-  await rename(pakeBinary, realPakeBinary);
-  await copyFile(launcherBinary, pakeBinary);
-  await chmod(pakeBinary, 0o755);
-  await chmod(realPakeBinary, 0o755);
-
-  await run([
-    "codesign",
-    "--force",
-    "--deep",
-    "--options",
-    "runtime",
-    "--sign",
-    "-",
-    stagingApp,
-  ]);
-  await run(["codesign", "--verify", "--deep", "--strict", "--verbose=2", stagingApp]);
-
-  const outputApp = path.join(finalDir, "DshDesktop.app");
-  await rename(stagingApp, outputApp);
-
-  const sevenZip = await findSevenZip();
-  const archive = path.join(finalDir, archiveName);
-  await createAndVerifyArchive(sevenZip, archive, [path.basename(outputApp)], finalDir);
-  return archive;
-}
-
-async function packageLinux(launcherBinary: string): Promise<string> {
-  const sourceAppImage = path.join(intermediateDir, "DshDesktop.AppImage");
-  await requireFile(sourceAppImage, "Pake AppImage");
-  await chmod(sourceAppImage, 0o755);
-
-  const extractDir = path.join(intermediateDir, "extract");
-  await resetDirectory(extractDir);
-  await run([sourceAppImage, "--appimage-extract"], { cwd: extractDir });
-
-  const appDir = path.join(extractDir, "squashfs-root");
-  const binDir = path.join(appDir, "usr", "bin");
-  let pakeBinary = path.join(binDir, "pake-dshdesktop");
-  if (!existsSync(pakeBinary)) {
-    const entries = await readdir(binDir, { withFileTypes: true });
-    const candidate = entries.find(
-      (entry) => (entry.isFile() || entry.isSymbolicLink()) && entry.name.startsWith("pake-"),
-    );
-    if (!candidate) {
-      throw new Error(`Could not locate the Pake executable under ${binDir}`);
-    }
-    pakeBinary = path.join(binDir, candidate.name);
-  }
-
-  const realPakeBinary = path.join(binDir, "pake-dshdesktop-real");
-  await rename(pakeBinary, realPakeBinary);
-  await copyFile(launcherBinary, pakeBinary);
-  await chmod(pakeBinary, 0o755);
-  await chmod(realPakeBinary, 0o755);
-
-  const appImageTool =
-    process.env.APPIMAGETOOL ||
-    (await findExecutable(["appimagetool"], ["/usr/local/bin", "/usr/bin"]));
-  if (!appImageTool) {
-    throw new Error("appimagetool was not found; set APPIMAGETOOL to its absolute path");
-  }
-
-  const outputAppImage = path.join(finalDir, "DshDesktop.AppImage");
-  await run([appImageTool, appDir, outputAppImage], {
-    env: { ARCH: "x86_64" },
-  });
-  await chmod(outputAppImage, 0o755);
-
-  const sevenZip = await findSevenZip();
-  const archive = path.join(finalDir, archiveName);
-  await createAndVerifyArchive(sevenZip, archive, [path.basename(outputAppImage)], finalDir);
-  return archive;
-}
-
-async function packageWindows(launcherBinary: string): Promise<string> {
-  const sourceBinary = path.join(intermediateDir, "DshDesktop.exe");
-  await requireFile(sourceBinary, "Pake executable");
-
-  const packageDir = path.join(intermediateDir, "package");
-  await resetDirectory(packageDir);
-  await copyFile(launcherBinary, path.join(packageDir, "DshDesktop.exe"));
-  await copyFile(sourceBinary, path.join(packageDir, "pake-dshdesktop-real.exe"));
-
-  const sevenZip = await findSevenZip();
-  const archive = path.join(finalDir, archiveName);
-  await createAndVerifyArchive(
-    sevenZip,
-    archive,
-    ["DshDesktop.exe", "pake-dshdesktop-real.exe"],
-    packageDir,
-  );
-  return archive;
-}
-
-async function runSmokeTest(finalApplication: string): Promise<void> {
-  const environment = {
-    DSH_SMOKE_TEST_SECONDS: "5",
-    DSH_LAUNCHER_LOG: path.join(intermediateDir, "smoke-test.log"),
-  };
-
-  if (platform === "darwin") {
-    await run(
-      [path.join(finalDir, "DshDesktop.app", "Contents", "MacOS", "pake-dshdesktop"), "--smoke-test"],
-      { env: environment },
-    );
-  } else if (platform === "linux") {
-    await run([path.join(finalDir, "DshDesktop.AppImage"), "--smoke-test"], {
-      env: environment,
-    });
-  } else {
-    await run([path.join(intermediateDir, "package", "DshDesktop.exe"), "--smoke-test"], {
-      env: environment,
-    });
-  }
-}
-
 async function createAndVerifyArchive(
-  sevenZip: string,
-  archive: string,
-  inputs: string[],
-  cwd: string,
+  output: string,
+  workingDirectory: string,
+  entry: string,
 ): Promise<void> {
-  await run([sevenZip, "a", "-t7z", "-mx=9", archive, ...inputs], { cwd });
-  await run([sevenZip, "t", archive]);
+  const sevenZip = Bun.which("7z") || Bun.which("7zz");
+  if (!sevenZip) {
+    throw new Error("7-Zip was not found (expected 7z or 7zz in PATH)");
+  }
+  await rm(output, { force: true });
+  await run(sevenZip, ["a", "-t7z", "-mx=9", output, entry], {
+    cwd: workingDirectory,
+  });
+  await run(sevenZip, ["t", output]);
 }
 
-async function findSevenZip(): Promise<string> {
-  const extraPaths: string[] = [];
-  if (platform === "win32" && process.env.ProgramFiles) {
-    extraPaths.push(path.join(process.env.ProgramFiles, "7-Zip"));
-  }
-  if (platform === "darwin") {
-    extraPaths.push("/opt/homebrew/bin", "/usr/local/bin");
-  }
-
-  const sevenZip = await findExecutable(["7z", "7zz", "7z.exe"], extraPaths);
-  if (!sevenZip) {
-    throw new Error("7z was not found; install 7-Zip and ensure it is available on PATH");
-  }
-  return sevenZip;
+async function runSmokeTest(
+  executable: string,
+  environment: Record<string, string> = {},
+): Promise<void> {
+  console.log("Running startup smoke test");
+  await run(executable, ["--smoke-test"], {
+    env: { DSH_SMOKE_TEST_SECONDS: "5", ...environment },
+  });
 }
 
 async function run(
-  command: string[],
-  options: { cwd?: string; env?: Record<string, string> } = {},
+  command: string,
+  arguments_: string[],
+  options: {
+    cwd?: string;
+    env?: Record<string, string>;
+  } = {},
 ): Promise<void> {
-  console.log(`> ${command.map(formatArgument).join(" ")}`);
-  const subprocess = Bun.spawn(command, {
-    cwd: options.cwd || projectDir,
+  console.log(`> ${[command, ...arguments_].map(displayArgument).join(" ")}`);
+  const child = Bun.spawn([command, ...arguments_], {
+    cwd: options.cwd ?? repositoryRoot,
     env: { ...process.env, ...options.env },
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",
   });
-  const exitCode = await subprocess.exited;
+  const exitCode = await child.exited;
   if (exitCode !== 0) {
-    throw new Error(`${command[0]} exited with code ${exitCode}`);
+    throw new Error(`${command} exited with status ${exitCode}`);
   }
+}
+
+function displayArgument(value: string): string {
+  return /[\s"']/u.test(value) ? JSON.stringify(value) : value;
 }
 
 async function resetDirectory(directory: string): Promise<void> {
-  await rm(directory, { recursive: true, force: true });
-  await mkdir(directory, { recursive: true });
+  const resolved = path.resolve(directory);
+  const resolvedDist = path.resolve(distRoot);
+  if (resolved === resolvedDist || !resolved.startsWith(`${resolvedDist}${path.sep}`)) {
+    throw new Error(`Refusing to reset a directory outside dist: ${resolved}`);
+  }
+  await rm(resolved, { recursive: true, force: true });
+  await mkdir(resolved, { recursive: true });
 }
 
-async function requireFile(file: string, description: string): Promise<void> {
-  try {
-    await access(file, constants.F_OK);
-  } catch {
-    throw new Error(`${description} was not found: ${file}`);
+function resolvePlatform(): PlatformName {
+  switch (process.platform) {
+    case "darwin":
+      return "macos";
+    case "linux":
+      return "linux";
+    case "win32":
+      return "windows";
+    default:
+      throw new Error(`Unsupported operating system: ${process.platform}`);
   }
 }
 
-async function findExecutable(names: string[], extraPaths: string[] = []): Promise<string | null> {
-  const searchPaths = [...(process.env.PATH || "").split(path.delimiter), ...extraPaths].filter(Boolean);
-  for (const directory of searchPaths) {
-    for (const name of names) {
-      const candidate = path.join(directory, name);
-      try {
-        await access(candidate, platform === "win32" ? constants.F_OK : constants.X_OK);
-        return candidate;
-      } catch {
-        // Continue searching.
-      }
-    }
+function resolveArchitecture(): "x86_64" | "arm64" {
+  switch (process.arch) {
+    case "x64":
+      return "x86_64";
+    case "arm64":
+      return "arm64";
+    default:
+      throw new Error(`Unsupported architecture: ${process.arch}`);
   }
-  return null;
 }
 
-function formatArgument(argument: string): string {
-  return /\s/.test(argument) ? JSON.stringify(argument) : argument;
+function validateNativeTarget(targetPlatform: PlatformName, targetArchitecture: string): void {
+  if (targetArchitecture === "arm64" && targetPlatform !== "macos") {
+    throw new Error(`${targetPlatform}/arm64 is not supported yet`);
+  }
+}
+
+function macOSInfoPlist(): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>zh_CN</string>
+  <key>CFBundleDisplayName</key>
+  <string>DSH Desktop</string>
+  <key>CFBundleExecutable</key>
+  <string>DshDesktop</string>
+  <key>CFBundleIdentifier</key>
+  <string>io.github.the-soloist.dsh-desktop</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>DshDesktop</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.0</string>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsArbitraryLoadsInWebContent</key>
+    <true/>
+    <key>NSAllowsLocalNetworking</key>
+    <true/>
+  </dict>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+</dict>
+</plist>
+`;
+}
+
+function linuxDesktopEntry(): string {
+  return `[Desktop Entry]
+Type=Application
+Name=DSH Desktop
+Comment=Desktop client for DeepSeek DSH
+Exec=DshDesktop
+Icon=dshdesktop
+Categories=Development;
+Terminal=false
+`;
+}
+
+function applicationIconSVG(): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4d6bfe"/>
+      <stop offset="1" stop-color="#2442c7"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#background)"/>
+  <path fill="#fff" d="M55 72h67c52 0 82 21 82 56s-30 56-82 56H55V72Zm42 31v50h25c26 0 41-9 41-25s-15-25-41-25H97Z"/>
+</svg>
+`;
 }

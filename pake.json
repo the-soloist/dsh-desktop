@@ -1,8 +1,0 @@
-{
-  "$schema": "https://raw.githubusercontent.com/tw93/Pake/main/schema/pake.schema.json",
-  "url": "http://127.0.0.1:3080",
-  "name": "DshDesktop",
-  "title": "DSH Desktop",
-  "width": 1200,
-  "height": 780
-}
