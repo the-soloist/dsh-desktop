@@ -116,39 +116,6 @@ func run() error {
 	defer closeLog()
 
 	logger.Printf("starting %s on %s/%s", appName, runtime.GOOS, runtime.GOARCH)
-	bunxPath, err := findBunx()
-	if err != nil {
-		return errors.New("未找到 bunx。请先安装 Bun，并确保 bunx 已加入 PATH，然后重新启动 DshDesktop。")
-	}
-	logger.Printf("using bunx: %s", bunxPath)
-
-	environment, dshHome := dshEnvironment(os.Environ())
-	environment = prependExecutablePaths(environment, executableSearchPaths(bunxPath)...)
-	if dshHome != "" {
-		logger.Printf("using DSH_HOME: %s", dshHome)
-	}
-	logger.Printf("DSH executable search path: %s", environmentValue(environment, "PATH"))
-
-	var backend *managedProcess
-	if isDSHReady() {
-		logger.Printf("reusing service already listening at %s", dshURL)
-	} else {
-		workspace, workspaceErr := dshWorkspace()
-		if workspaceErr != nil {
-			return workspaceErr
-		}
-		logger.Printf("starting DSH in %s", workspace)
-		backend, err = startDSH(bunxPath, workspace, environment, logger.Writer())
-		if err != nil {
-			return fmt.Errorf("无法启动 DSH：%w", err)
-		}
-		defer backend.Stop(logger)
-
-		if err = waitForDSH(backend, startTimeout()); err != nil {
-			return err
-		}
-		logger.Printf("DSH is ready at %s", dshURL)
-	}
 
 	statePath, err := windowStatePath()
 	if err != nil {
@@ -156,11 +123,16 @@ func run() error {
 	}
 	store := newStateStore(statePath, logger)
 	initialState := store.snapshot()
+	startupState := newStartupTimeline("正在准备", "即将启动本地 DSH 服务…")
 
 	app := application.New(application.Options{
 		Name:        appName,
 		Description: appDescription,
 		Icon:        appicon.PNG,
+		Assets: application.AssetOptions{
+			Handler:        startupAssetHandler(),
+			DisableLogging: true,
+		},
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: false,
 		},
@@ -171,7 +143,7 @@ func run() error {
 	windowOptions := application.WebviewWindowOptions{
 		Name:             "main",
 		Title:            "DSH Desktop",
-		URL:              dshURL,
+		URL:              "/",
 		Width:            initialState.Width,
 		Height:           initialState.Height,
 		MinWidth:         minimumWidth,
@@ -190,10 +162,17 @@ func run() error {
 	}
 
 	window := app.Window.NewWithOptions(windowOptions)
-	backendState := newManagedProcessState(backend)
+	logger.Printf("startup status: 正在准备 — 即将启动本地 DSH 服务…")
+	backendState := newManagedProcessState(nil)
 	var quitting atomic.Bool
 	var appStarted atomic.Bool
-	var restarting atomic.Bool
+	var serviceActionRunning atomic.Bool
+	var pendingDSHNavigation atomic.Bool
+	var smokeScheduled atomic.Bool
+	var smokeFailureMu sync.Mutex
+	var smokeFailure error
+	var startupIntentMu sync.Mutex
+	pendingStartupIntent := startupIntentInitial
 	captureNormalGeometry := func() {
 		if window.IsMaximised() || window.IsMinimised() || window.IsFullscreen() {
 			return
@@ -244,10 +223,20 @@ func run() error {
 		}
 		window.Show().Focus()
 	}
-	refreshPage := func() {
+	requestStartupPage := func(intent startupIntent) {
+		pendingDSHNavigation.Store(false)
+		startupIntentMu.Lock()
+		pendingStartupIntent = intent
+		startupIntentMu.Unlock()
+		window.SetURL("/")
 		showWindow()
-		window.Reload()
-		logger.Printf("desktop page refreshed")
+	}
+	takeStartupIntent := func() startupIntent {
+		startupIntentMu.Lock()
+		defer startupIntentMu.Unlock()
+		intent := pendingStartupIntent
+		pendingStartupIntent = startupIntentNone
+		return intent
 	}
 	forceRefreshPage := func() {
 		showWindow()
@@ -274,52 +263,153 @@ func run() error {
 		event.Cancel()
 	})
 
+	setStartupStatus := func(status, detail string, failed bool) {
+		logger.Printf("startup status: %s — %s", status, strings.ReplaceAll(detail, "\n", " "))
+		window.EmitEvent(startupUpdateEvent, startupState.append(status, detail, failed, false))
+	}
+	recordSmokeFailure := func(failure error) {
+		if !smokeTestEnabled() || failure == nil {
+			return
+		}
+		smokeFailureMu.Lock()
+		if smokeFailure == nil {
+			smokeFailure = failure
+		}
+		smokeFailureMu.Unlock()
+	}
+	scheduleSmokeFailureExit := func() {
+		if smokeTestEnabled() && smokeScheduled.CompareAndSwap(false, true) {
+			time.AfterFunc(time.Second, quitApplication)
+		}
+	}
+	scheduleSmokeSuccess := func() {
+		if !smokeTestEnabled() || !smokeScheduled.CompareAndSwap(false, true) {
+			return
+		}
+		duration := smokeTestDuration()
+		closeDelay := time.Second
+		if duration <= 2*time.Second {
+			closeDelay = duration / 2
+		}
+		logger.Printf("smoke test will close the window after %s and exit after %s", closeDelay, duration)
+		time.AfterFunc(closeDelay, window.Close)
+		time.AfterFunc(duration, quitApplication)
+	}
+	navigateToDSH := func() {
+		if quitting.Load() || !pendingDSHNavigation.CompareAndSwap(true, false) {
+			return
+		}
+		window.SetURL(dshURL)
+		showWindow()
+		scheduleSmokeSuccess()
+	}
+	showStartupFailure := func(summary string, failure error) {
+		detail := summary
+		if failure != nil {
+			detail += "\n\n" + failure.Error()
+		}
+		logger.Printf("DSH startup failed: %s", detail)
+		setStartupStatus("DSH 启动失败", detail+"\n\n请修复问题后从托盘菜单选择“重启 DSH”。", true)
+		showWindow()
+		recordSmokeFailure(errors.New(detail))
+		scheduleSmokeFailureExit()
+	}
+	showDSH := func(message string) {
+		logger.Printf("DSH is ready at %s", dshURL)
+		pendingDSHNavigation.Store(true)
+		window.EmitEvent(startupUpdateEvent, startupState.append("DSH 已就绪", message, false, true))
+		time.AfterFunc(5*time.Second, navigateToDSH)
+	}
+
 	monitorBackend := func(process *managedProcess) {
 		go func() {
 			<-process.done
 			if !backendState.clearIfCurrent(process) || quitting.Load() {
 				return
 			}
-			message := "DSH 服务已停止，可从托盘菜单选择“重启 DSH”。"
+			message := "DSH 服务已停止。请从托盘菜单选择“重启 DSH”。"
 			if processErr := process.waitError(); processErr != nil {
 				logger.Printf("DSH process exited: %v", processErr)
 				message += "\n\n" + processErr.Error()
+				recordSmokeFailure(fmt.Errorf("DSH process exited: %w", processErr))
 			} else {
 				logger.Printf("DSH process exited")
+				recordSmokeFailure(errors.New("DSH process exited"))
 			}
-			showPlatformWarning(appName, message)
+			logger.Printf("startup status: DSH 已停止 — %s", strings.ReplaceAll(message, "\n", " "))
+			startupState.reset("DSH 已停止", message, true)
+			requestStartupPage(startupIntentNone)
+			scheduleSmokeFailureExit()
 		}()
 	}
-	restartDSH := func() {
-		if !restarting.CompareAndSwap(false, true) {
+	startDSHAction := func(restart bool) {
+		if !serviceActionRunning.CompareAndSwap(false, true) {
 			return
 		}
 		go func() {
-			defer restarting.Store(false)
-			logger.Printf("DSH restart requested")
+			defer serviceActionRunning.Store(false)
 
-			current := backendState.take()
-			if current == nil && isDSHReady() {
-				showPlatformWarning(appName, "当前 DSH 服务由外部进程启动，DSH Desktop 不会终止它。")
-				return
+			if restart {
+				logger.Printf("DSH restart requested")
+				current := backendState.take()
+				if current == nil && isDSHReady() {
+					showPlatformWarning(appName, "当前 DSH 服务由外部进程启动，DSH Desktop 不会终止它。")
+					window.SetURL(dshURL)
+					showWindow()
+					return
+				}
+				if current != nil {
+					current.Stop(logger)
+				}
+			} else {
+				setStartupStatus("正在检查本地服务", "正在检测 127.0.0.1:3080…", false)
+				if isDSHReady() {
+					setStartupStatus("正在连接 DSH", "检测到已有服务，正在确认其稳定性…", false)
+					stableWait := readinessStability + 2*readinessInterval
+					if stableErr := waitForDSHWithProbe(nil, stableWait, readinessInterval, readinessStability, isDSHReady); stableErr == nil {
+						logger.Printf("reusing service already listening at %s", dshURL)
+						showDSH("正在加载现有 DSH 服务…")
+						return
+					}
+					logger.Printf("existing DSH service disappeared during readiness check")
+				}
 			}
-			if current != nil {
-				current.Stop(logger)
-			}
+
 			if quitting.Load() {
 				return
 			}
-
-			workspace, workspaceErr := dshWorkspace()
-			if workspaceErr != nil {
-				logger.Printf("cannot restart DSH: %v", workspaceErr)
-				showPlatformWarning(appName, "无法重启 DSH："+workspaceErr.Error())
+			setStartupStatus("正在检查运行环境", "正在查找 bunx 与 Node.js…", false)
+			bunxPath, findErr := findBunx()
+			if findErr != nil {
+				showStartupFailure("未找到 bunx。请先安装 Bun，并确保 bunx 已加入 PATH。", findErr)
 				return
 			}
-			next, startErr := startDSH(bunxPath, workspace, environment, logger.Writer())
+			logger.Printf("using bunx: %s", bunxPath)
+
+			environment, dshHome := dshEnvironment(os.Environ())
+			environment = prependExecutablePaths(environment, executableSearchPaths(bunxPath)...)
+			if dshHome != "" {
+				logger.Printf("using DSH_HOME: %s", dshHome)
+			}
+			logger.Printf("DSH executable search path: %s", environmentValue(environment, "PATH"))
+			workspace, workspaceErr := dshWorkspace()
+			if workspaceErr != nil {
+				showStartupFailure("无法确定 DSH 工作目录。", workspaceErr)
+				return
+			}
+
+			setStartupStatus("正在启动 DSH", "正在后台启动本地 Web 服务…", false)
+			logger.Printf("starting DSH in %s", workspace)
+			summaryLines := make(chan string, 32)
+			output := newStartupOutputRecorder(logger.Writer(), func(line string) {
+				select {
+				case summaryLines <- line:
+				default:
+				}
+			})
+			next, startErr := startDSH(bunxPath, workspace, environment, output)
 			if startErr != nil {
-				logger.Printf("cannot restart DSH: %v", startErr)
-				showPlatformWarning(appName, "无法重启 DSH："+startErr.Error())
+				showStartupFailure("无法启动 DSH。", startErr)
 				return
 			}
 			backendState.set(next)
@@ -329,15 +419,43 @@ func run() error {
 				}
 				return
 			}
-			if waitErr := waitForDSH(next, startTimeout()); waitErr != nil {
+
+			setStartupStatus("正在等待 DSH", "DSH 进程已启动，正在等待服务和插件完成初始化…", false)
+			summaryDone := make(chan struct{})
+			go func() {
+				reported := make(map[string]struct{})
+				for {
+					select {
+					case line := <-summaryLines:
+						key, status, detail, ok := dshOutputSummary(line)
+						if !ok {
+							continue
+						}
+						if _, exists := reported[key]; exists {
+							continue
+						}
+						reported[key] = struct{}{}
+						setStartupStatus(status, detail, false)
+					case <-summaryDone:
+						return
+					case <-next.done:
+						return
+					}
+				}
+			}()
+			waitErr := waitForDSH(next, startTimeout())
+			close(summaryDone)
+			if waitErr != nil {
 				if backendState.clearIfCurrent(next) {
 					next.Stop(logger)
 				}
 				if quitting.Load() {
 					return
 				}
-				logger.Printf("cannot restart DSH: %v", waitErr)
-				showPlatformWarning(appName, "无法重启 DSH："+waitErr.Error())
+				if recentOutput := output.recentOutput(); recentOutput != "" {
+					waitErr = fmt.Errorf("%w\n\n最近的 DSH 输出：\n%s", waitErr, recentOutput)
+				}
+				showStartupFailure("DSH 未能完成启动。", waitErr)
 				return
 			}
 			if quitting.Load() {
@@ -347,18 +465,43 @@ func run() error {
 				return
 			}
 			monitorBackend(next)
-			logger.Printf("DSH restarted and ready at %s", dshURL)
-			refreshPage()
+			showDSH("启动完成，正在加载界面…")
 		}()
 	}
+	requestDSHRestart := func() {
+		if serviceActionRunning.Load() {
+			return
+		}
+		logger.Printf("DSH restart requested from tray")
+		startupState.reset("正在重启 DSH", "正在停止现有服务…", false)
+		requestStartupPage(startupIntentRestart)
+	}
+
+	app.Event.On(startupFrontendReadyEvent, func(event *application.CustomEvent) {
+		if event.Sender != "" && event.Sender != window.Name() {
+			return
+		}
+		window.EmitEvent(startupUpdateEvent, startupState.snapshot())
+		switch takeStartupIntent() {
+		case startupIntentInitial:
+			startDSHAction(false)
+		case startupIntentRestart:
+			startDSHAction(true)
+		}
+	})
+	app.Event.On(startupNavigateEvent, func(event *application.CustomEvent) {
+		if event.Sender == "" || event.Sender == window.Name() {
+			navigateToDSH()
+		}
+	})
 
 	trayMenu := app.NewMenu()
 	trayMenu.Add("显示主窗口").OnClick(func(*application.Context) { showWindow() })
-	trayMenu.Add("刷新页面").OnClick(func(*application.Context) { refreshPage() })
 	trayMenu.Add("强制刷新").OnClick(func(*application.Context) { forceRefreshPage() })
-	trayMenu.Add("重启 DSH").OnClick(func(*application.Context) { restartDSH() })
+	trayMenu.Add("重启 DSH").OnClick(func(*application.Context) { requestDSHRestart() })
 	trayMenu.Add("关闭窗口").OnClick(func(*application.Context) { closeWindow() })
 	trayMenu.AddSeparator()
+	trayMenu.Add("关于").OnClick(func(*application.Context) { app.Menu.ShowAbout() })
 	trayMenu.Add("完全退出").OnClick(func(*application.Context) { quitApplication() })
 	tray := app.SystemTray.New()
 	tray.SetIcon(appicon.PNG)
@@ -379,16 +522,7 @@ func run() error {
 		if startupConsoleOwned {
 			hideStartupConsole()
 		}
-		if smokeTestEnabled() {
-			duration := smokeTestDuration()
-			closeDelay := time.Second
-			if duration <= 2*time.Second {
-				closeDelay = duration / 2
-			}
-			logger.Printf("smoke test will close the window after %s and exit after %s", closeDelay, duration)
-			time.AfterFunc(closeDelay, window.Close)
-			time.AfterFunc(duration, quitApplication)
-		}
+		showWindow()
 	})
 
 	app.OnShutdown(func() {
@@ -401,14 +535,16 @@ func run() error {
 		}
 	})
 
-	if backend != nil {
-		monitorBackend(backend)
-	}
-
 	if err = app.Run(); err != nil {
 		return fmt.Errorf("desktop window failed: %w", err)
 	}
 	logger.Printf("application stopped")
+	smokeFailureMu.Lock()
+	failure := smokeFailure
+	smokeFailureMu.Unlock()
+	if failure != nil {
+		return failure
+	}
 	return nil
 }
 
@@ -652,6 +788,10 @@ func waitForDSHWithProbe(
 	stability time.Duration,
 	probe func() bool,
 ) error {
+	var processDone <-chan struct{}
+	if process != nil {
+		processDone = process.done
+	}
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	ticker := time.NewTicker(interval)
@@ -670,7 +810,7 @@ func waitForDSHWithProbe(
 			readySince = time.Time{}
 		}
 		select {
-		case <-process.done:
+		case <-processDone:
 			if err := process.waitError(); err != nil {
 				return fmt.Errorf("DSH 在服务就绪前退出：%w", err)
 			}
@@ -804,7 +944,11 @@ func newLauncherLogger() (*log.Logger, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	logger := log.New(io.MultiWriter(os.Stdout, file), "", log.Ldate|log.Ltime|log.Lmicroseconds)
+	writers := []io.Writer{file}
+	if _, statErr := os.Stdout.Stat(); statErr == nil {
+		writers = append(writers, os.Stdout)
+	}
+	logger := log.New(io.MultiWriter(writers...), "", log.Ldate|log.Ltime|log.Lmicroseconds)
 	return logger, func() { _ = file.Close() }, nil
 }
 
