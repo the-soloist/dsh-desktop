@@ -21,6 +21,7 @@ import (
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
 
+	dshdesktop "github.com/the-soloist/dsh-desktop"
 	"github.com/the-soloist/dsh-desktop/internal/appicon"
 )
 
@@ -114,6 +115,11 @@ func run() error {
 		return fmt.Errorf("cannot initialise the launcher log: %w", err)
 	}
 	defer closeLog()
+	version, err := dshdesktop.CurrentVersion()
+	if err != nil {
+		return fmt.Errorf("cannot determine application version: %w", err)
+	}
+	aboutDescription := fmt.Sprintf("%s\nVersion %s", appDescription, version)
 
 	logger.Printf("starting %s on %s/%s", appName, runtime.GOOS, runtime.GOARCH)
 
@@ -127,7 +133,7 @@ func run() error {
 
 	app := application.New(application.Options{
 		Name:        appName,
-		Description: appDescription,
+		Description: aboutDescription,
 		Icon:        appicon.PNG,
 		Assets: application.AssetOptions{
 			Handler:        startupAssetHandler(),
@@ -500,9 +506,9 @@ func run() error {
 	trayMenu.Add("强制刷新").OnClick(func(*application.Context) { forceRefreshPage() })
 	trayMenu.Add("重启 DSH").OnClick(func(*application.Context) { requestDSHRestart() })
 	trayMenu.Add("关闭窗口").OnClick(func(*application.Context) { closeWindow() })
+	trayMenu.Add("完全退出").OnClick(func(*application.Context) { quitApplication() })
 	trayMenu.AddSeparator()
 	trayMenu.Add("关于").OnClick(func(*application.Context) { app.Menu.ShowAbout() })
-	trayMenu.Add("完全退出").OnClick(func(*application.Context) { quitApplication() })
 	tray := app.SystemTray.New()
 	tray.SetIcon(appicon.PNG)
 	tray.SetTooltip("DSH Desktop")
