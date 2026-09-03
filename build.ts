@@ -11,6 +11,8 @@ import process from "node:process";
 
 const repositoryRoot = import.meta.dir;
 const distRoot = path.join(repositoryRoot, "dist");
+const iconPath = path.join(repositoryRoot, "internal", "appicon", "dsh-desktop-icon.png");
+const applicationPackage = "./cmd/dsh-desktop";
 const smokeTest = process.argv.slice(2).includes("--smoke-test");
 const unknownArguments = process.argv
   .slice(2)
@@ -58,6 +60,7 @@ async function buildMacOS(): Promise<void> {
   const macOSDirectory = path.join(contents, "MacOS");
   const resourcesDirectory = path.join(contents, "Resources");
   const packagedBinary = path.join(macOSDirectory, "DshDesktop");
+  const icnsIcon = path.join(resourcesDirectory, "DshDesktop.icns");
 
   await buildGoBinary(binary, {
     CGO_ENABLED: "1",
@@ -69,6 +72,7 @@ async function buildMacOS(): Promise<void> {
   await mkdir(resourcesDirectory, { recursive: true });
   await copyFile(binary, packagedBinary);
   await chmod(packagedBinary, 0o755);
+  await createMacOSIcon(icnsIcon);
   await writeFile(path.join(contents, "Info.plist"), macOSInfoPlist(), "utf8");
 
   await run("codesign", ["--force", "--deep", "--sign", "-", applicationBundle]);
@@ -85,7 +89,7 @@ async function buildLinux(): Promise<void> {
   const binaryDirectory = path.join(appDir, "usr", "bin");
   const binary = path.join(binaryDirectory, "DshDesktop");
   const desktopFile = "dshdesktop.desktop";
-  const iconFile = "dshdesktop.svg";
+  const iconFile = "dshdesktop.png";
   const appImage = path.join(platformOutput, "DshDesktop.AppImage");
 
   await mkdir(binaryDirectory, { recursive: true });
@@ -93,7 +97,7 @@ async function buildLinux(): Promise<void> {
   await chmod(binary, 0o755);
   await symlink("usr/bin/DshDesktop", path.join(appDir, "AppRun"));
   await writeFile(path.join(appDir, desktopFile), linuxDesktopEntry(), "utf8");
-  await writeFile(path.join(appDir, iconFile), applicationIconSVG(), "utf8");
+  await copyFile(iconPath, path.join(appDir, iconFile));
 
   const applicationsDirectory = path.join(appDir, "usr", "share", "applications");
   const iconsDirectory = path.join(
@@ -102,7 +106,7 @@ async function buildLinux(): Promise<void> {
     "share",
     "icons",
     "hicolor",
-    "scalable",
+    "1024x1024",
     "apps",
   );
   await mkdir(applicationsDirectory, { recursive: true });
@@ -129,10 +133,31 @@ async function buildLinux(): Promise<void> {
 
 async function buildWindows(): Promise<void> {
   const packageDirectory = path.join(intermediate, "package");
+  const sourceDirectory = path.join(intermediate, "windows-source");
   const executable = path.join(packageDirectory, "DshDesktop.exe");
+  const icoIcon = path.join(intermediate, "DshDesktop.ico");
+  const resourceObject = path.join(sourceDirectory, "rsrc_windows_amd64.syso");
 
   await mkdir(packageDirectory, { recursive: true });
-  await buildGoBinary(executable);
+  await mkdir(sourceDirectory, { recursive: true });
+  await copyFile(path.join(repositoryRoot, "cmd", "dsh-desktop", "main.go"), path.join(sourceDirectory, "main.go"));
+  await run(
+    "go",
+    [
+      "run",
+      "./scripts/windows-resources",
+      "-input",
+      iconPath,
+      "-ico",
+      icoIcon,
+      "-syso",
+      resourceObject,
+      "-arch",
+      "amd64",
+    ],
+    { env: goToolEnvironment() },
+  );
+  await buildGoBinary(executable, { CGO_ENABLED: "0" }, "./dist/intermediate/windows/windows-source");
   await createAndVerifyArchive(archivePath, packageDirectory, "DshDesktop.exe");
 
   if (smokeTest) {
@@ -143,6 +168,7 @@ async function buildWindows(): Promise<void> {
 async function buildGoBinary(
   output: string,
   environment: Record<string, string> = {},
+  packageName = applicationPackage,
 ): Promise<void> {
   await run(
     "go",
@@ -155,15 +181,26 @@ async function buildGoBinary(
       "-ldflags=-s -w",
       "-o",
       output,
-      ".",
+      packageName,
     ],
     {
-      env: {
-        GOCACHE: path.join(intermediate, "go-cache"),
-        GOTELEMETRY: "off",
-        ...environment,
-      },
+      env: { ...goToolEnvironment(), ...environment },
     },
+  );
+}
+
+function goToolEnvironment(): Record<string, string> {
+  return {
+    GOCACHE: path.join(intermediate, "go-cache"),
+    GOTELEMETRY: "off",
+  };
+}
+
+async function createMacOSIcon(output: string): Promise<void> {
+  await run(
+    "go",
+    ["run", "./scripts/macos-icon", "-input", iconPath, "-output", output],
+    { env: goToolEnvironment() },
   );
 }
 
@@ -272,6 +309,8 @@ function macOSInfoPlist(): string {
   <string>DshDesktop</string>
   <key>CFBundleIdentifier</key>
   <string>io.github.the-soloist.dsh-desktop</string>
+  <key>CFBundleIconFile</key>
+  <string>DshDesktop.icns</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
@@ -307,19 +346,5 @@ Exec=DshDesktop
 Icon=dshdesktop
 Categories=Development;
 Terminal=false
-`;
-}
-
-function applicationIconSVG(): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-  <defs>
-    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#4d6bfe"/>
-      <stop offset="1" stop-color="#2442c7"/>
-    </linearGradient>
-  </defs>
-  <rect width="256" height="256" rx="56" fill="url(#background)"/>
-  <path fill="#fff" d="M55 72h67c52 0 82 21 82 56s-30 56-82 56H55V72Zm42 31v50h25c26 0 41-9 41-25s-15-25-41-25H97Z"/>
-</svg>
 `;
 }

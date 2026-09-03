@@ -1,4 +1,4 @@
-package main
+package desktop
 
 import (
 	"context"
@@ -15,10 +15,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
+
+	"github.com/the-soloist/dsh-desktop/internal/appicon"
 )
 
 const (
@@ -59,7 +62,9 @@ type managedProcess struct {
 	stopOnce sync.Once
 }
 
-func main() {
+// Main starts the desktop application and reports fatal startup errors using a
+// platform-native warning dialog.
+func Main() {
 	if err := run(); err != nil {
 		message := err.Error()
 		log.Printf("fatal: %s", message)
@@ -119,9 +124,12 @@ func run() error {
 	app := application.New(application.Options{
 		Name:        appName,
 		Description: appDescription,
+		Icon:        appicon.PNG,
 		Mac: application.MacOptions{
-			ApplicationShouldTerminateAfterLastWindowClosed: true,
+			ApplicationShouldTerminateAfterLastWindowClosed: false,
 		},
+		Windows: application.WindowsOptions{DisableQuitOnLastWindowClosed: true},
+		Linux:   application.LinuxOptions{DisableQuitOnLastWindowClosed: true, ProgramName: appName},
 	})
 
 	windowOptions := application.WebviewWindowOptions{
@@ -145,6 +153,7 @@ func run() error {
 	}
 
 	window := app.Window.NewWithOptions(windowOptions)
+	var quitting atomic.Bool
 	captureNormalGeometry := func() {
 		if window.IsMaximised() || window.IsMinimised() || window.IsFullscreen() {
 			return
@@ -174,7 +183,7 @@ func run() error {
 		store.update(func(state *windowState) { state.Maximised = false })
 		captureNormalGeometry()
 	})
-	window.RegisterHook(events.Common.WindowClosing, func(*application.WindowEvent) {
+	saveWindowState := func() {
 		if window.IsMaximised() {
 			store.update(func(state *windowState) { state.Maximised = true })
 		} else {
@@ -183,6 +192,48 @@ func run() error {
 		if saveErr := store.save(); saveErr != nil {
 			logger.Printf("cannot save window state: %v", saveErr)
 		}
+	}
+	closeWindow := func() {
+		saveWindowState()
+		window.Hide()
+		logger.Printf("desktop window closed; application remains in the system tray")
+	}
+	showWindow := func() {
+		if window.IsMinimised() {
+			window.UnMinimise()
+		}
+		window.Show().Focus()
+	}
+	quitApplication := func() {
+		if !quitting.CompareAndSwap(false, true) {
+			return
+		}
+		saveWindowState()
+		logger.Printf("complete application exit requested")
+		app.Quit()
+	}
+
+	window.RegisterHook(events.Common.WindowClosing, func(event *application.WindowEvent) {
+		if quitting.Load() {
+			saveWindowState()
+			return
+		}
+		closeWindow()
+		event.Cancel()
+	})
+
+	trayMenu := app.NewMenu()
+	trayMenu.Add("显示主窗口").OnClick(func(*application.Context) { showWindow() })
+	trayMenu.Add("关闭窗口").OnClick(func(*application.Context) { closeWindow() })
+	trayMenu.AddSeparator()
+	trayMenu.Add("完全退出").OnClick(func(*application.Context) { quitApplication() })
+	tray := app.SystemTray.New()
+	tray.SetIcon(appicon.PNG)
+	tray.SetTooltip("DSH Desktop")
+	tray.SetMenu(trayMenu)
+	tray.OnClick(showWindow)
+	app.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(*application.ApplicationEvent) {
+		showWindow()
 	})
 
 	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
@@ -192,12 +243,18 @@ func run() error {
 		}
 		if smokeTestEnabled() {
 			duration := smokeTestDuration()
-			logger.Printf("smoke test will exit after %s", duration)
-			time.AfterFunc(duration, app.Quit)
+			closeDelay := time.Second
+			if duration <= 2*time.Second {
+				closeDelay = duration / 2
+			}
+			logger.Printf("smoke test will close the window after %s and exit after %s", closeDelay, duration)
+			time.AfterFunc(closeDelay, window.Close)
+			time.AfterFunc(duration, quitApplication)
 		}
 	})
 
 	app.OnShutdown(func() {
+		quitting.Store(true)
 		if saveErr := store.save(); saveErr != nil {
 			logger.Printf("cannot save window state during shutdown: %v", saveErr)
 		}
@@ -212,7 +269,7 @@ func run() error {
 			if backend.waitError() != nil {
 				logger.Printf("DSH process exited: %v", backend.waitError())
 			}
-			app.Quit()
+			quitApplication()
 		}()
 	}
 

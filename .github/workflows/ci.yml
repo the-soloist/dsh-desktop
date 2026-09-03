@@ -45,9 +45,13 @@ jobs:
 
       - name: Quality | Go vet
         run: go vet -tags server ./...
+        env:
+          CGO_ENABLED: 0
 
       - name: Quality | Go tests
         run: go test -tags server ./...
+        env:
+          CGO_ENABLED: 0
 
       - name: Quality | Build script
         run: |

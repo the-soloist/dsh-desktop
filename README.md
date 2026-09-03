@@ -1,6 +1,6 @@
 # DSH Desktop
 
-DSH Desktop 是一个使用 Go 和 Wails 编写的 DeepSeek DSH 桌面客户端。程序先启动本机 DSH Web 服务，再通过系统 WebView 打开 `http://127.0.0.1:3080`；安装包不包含 Chromium、Bun 或 DSH。
+DSH Desktop 是一个使用 Go 和 Wails 编写的 DeepSeek DSH 桌面客户端。程序先启动本机 DSH Web 服务，再通过系统 WebView 打开 `http://127.0.0.1:3080`；安装包不包含 Chromium、Bun 或 DSH。应用关闭主窗口后继续在系统托盘（macOS 菜单栏）运行。
 
 ## 启动流程
 
@@ -13,15 +13,32 @@ DSH Desktop 是一个使用 Go 和 Wails 编写的 DeepSeek DSH 桌面客户端�
    ```
 
 4. DSH 就绪后创建桌面窗口；Windows 从资源管理器启动时会先显示控制台，就绪后自动隐藏。若从已有终端启动，不会隐藏用户的终端窗口。
-5. 窗口关闭时保存正常状态下的位置、大小和最大化状态，并终止本次程序启动的 DSH 进程树；复用的外部 DSH 服务不会被终止。
+5. 点击窗口 X 或托盘中的“关闭窗口”只隐藏主窗口，DSH 继续在后台运行；单击托盘图标可再次显示窗口。
+6. 托盘右键菜单中的“完全退出”会保存窗口状态，并终止本次程序启动的完整 DSH/bun 进程树；复用的外部 DSH 服务不会被终止。
 
-窗口状态保存在系统用户配置目录下的 `DshDesktop/window-state.json`。
+托盘菜单包含“显示主窗口”“关闭窗口”和“完全退出”。窗口状态保存在系统用户配置目录下的 `DshDesktop/window-state.json`。
+
+## 目录结构
+
+- `cmd/dsh-desktop/`：最小化程序入口。
+- `internal/desktop/`：DSH 生命周期、窗口、托盘、状态持久化和平台适配。
+- `internal/appicon/`：嵌入程序与托盘的圆角 PNG 图标。
+- `scripts/round-icon/`：从原始图片生成透明圆角图标。
+- `scripts/macos-icon/`：将圆角 PNG 编码为 macOS ICNS。
+- `scripts/windows-resources/`：生成 Windows ICO、manifest、版本信息和 `.syso` 资源。
+- `build.ts`：按当前原生平台编译和封装最终 7z。
+
+重新生成圆角图标：
+
+```bash
+go run ./scripts/round-icon -input /path/to/source.png
+```
 
 ## 系统要求
 
 - Go 1.25 或更高版本（仅构建时需要）
 - Bun，并确保 `bunx` 可执行
-- macOS：系统 WebKit 和 Xcode Command Line Tools
+- macOS 13 或更高版本：系统 WebKit 和 Xcode Command Line Tools
 - Linux：GTK 4、WebKitGTK 6.0、`pkg-config`、`appimagetool` 和 7-Zip
 - Windows：系统 WebView2 和 7-Zip
 
@@ -42,7 +59,7 @@ bun run build.ts
 - `dist/linux/DshDesktop-linux-x86_64.7z`
 - `dist/windows/DshDesktop-windows-x86_64.7z`
 
-macOS 压缩包内是经过 ad-hoc 签名的 `DshDesktop.app`；正式发布仍需 Developer ID 签名和公证。Linux 压缩包内是 `DshDesktop.AppImage`，运行时仍依赖系统 WebKitGTK。Windows 压缩包内是便携版 `DshDesktop.exe`，不生成安装程序。
+macOS 压缩包内是带 ICNS 图标并经过 ad-hoc 签名的 `DshDesktop.app`；正式发布仍需 Developer ID 签名和公证。Linux 压缩包内是带 PNG 图标的 `DshDesktop.AppImage`，运行时仍依赖系统 WebKitGTK。Windows 压缩包内是嵌入 ICO、manifest 和版本信息的便携版 `DshDesktop.exe`，不生成安装程序。
 
 可选的启动测试：
 
