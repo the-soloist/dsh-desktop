@@ -120,6 +120,23 @@ func TestStopCurrentReturnsTerminationFailures(t *testing.T) {
 	}
 }
 
+func TestStopCurrentAcceptsSuccessfulForcedFallback(t *testing.T) {
+	done := make(chan struct{})
+	process := &Process{cmd: &exec.Cmd{Process: &os.Process{Pid: 42}}, done: done}
+	supervisor := NewSupervisor(Config{Logger: log.New(io.Discard, "", 0), StopTimeout: time.Millisecond})
+	supervisor.active = process
+	supervisor.terminate = func(_ int, force bool) error {
+		if force {
+			close(done)
+			return nil
+		}
+		return errors.New("graceful termination unavailable")
+	}
+	if err := supervisor.StopCurrent(); err != nil {
+		t.Fatalf("StopCurrent() error = %v, want successful forced fallback", err)
+	}
+}
+
 func TestCloseRejectsFutureStarts(t *testing.T) {
 	supervisor := NewSupervisor(Config{Package: "example", Logger: log.New(io.Discard, "", 0)})
 	if err := supervisor.Close(); err != nil {

@@ -230,20 +230,22 @@ func (process *Process) stop(timeout time.Duration, logger *log.Logger, terminat
 		logger.Printf("stopping DSH process tree (pid %d)", processID)
 		var failures []error
 		if err := terminate(processID, false); err != nil {
+			logger.Printf("graceful DSH process-tree termination failed: %v", err)
 			failures = append(failures, fmt.Errorf("terminate DSH process tree: %w", err))
 		}
 		if waitForExit(process.done, timeout) {
-			process.stopErr = errors.Join(failures...)
 			return
 		}
 
 		logger.Printf("forcing DSH process tree to stop")
 		if err := terminate(processID, true); err != nil {
+			logger.Printf("forced DSH process-tree termination failed: %v", err)
 			failures = append(failures, fmt.Errorf("force DSH process tree to stop: %w", err))
 		}
-		if !waitForExit(process.done, timeout) {
-			failures = append(failures, errors.New("DSH process did not exit after forced termination"))
+		if waitForExit(process.done, timeout) {
+			return
 		}
+		failures = append(failures, errors.New("DSH process did not exit after forced termination"))
 		process.stopErr = errors.Join(failures...)
 	})
 	return process.stopErr
