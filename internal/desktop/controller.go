@@ -85,6 +85,10 @@ func (controller *controller) bind() {
 		}
 		controller.window.ensureVisible()
 		controller.window.show()
+		if smokeTestEnabled() {
+			controller.logger.Printf("smoke test starting DSH without waiting for the startup frontend")
+			controller.startPendingService()
+		}
 	})
 	controller.app.OnShutdown(controller.shutdown)
 }
@@ -110,6 +114,10 @@ func (controller *controller) onStartupFrontendReady(event *application.CustomEv
 		return
 	}
 	controller.window.window.EmitEvent(startupUpdateEvent, controller.startup.snapshot())
+	controller.startPendingService()
+}
+
+func (controller *controller) startPendingService() {
 	switch controller.takeStartupIntent() {
 	case startupIntentInitial:
 		controller.startService(false)
