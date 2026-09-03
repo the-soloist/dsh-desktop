@@ -72,7 +72,15 @@ export async function runSmokeTest(
     if (!xvfbRun) {
       throw new Error("xvfb-run was not found; it is required for the Linux smoke test");
     }
-    await run(xvfbRun, ["-a", "--", executable], { env: smokeEnvironment });
+    await run(xvfbRun, ["-a", "--", executable], {
+      env: {
+        ...smokeEnvironment,
+        // GitHub-hosted runners do not permit WebKitGTK's bubblewrap process
+        // to create a user namespace. Limit this override to the disposable
+        // headless smoke test; normal application launches keep the sandbox.
+        WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: "1",
+      },
+    });
     return;
   }
   await run(executable, [], { env: smokeEnvironment });
