@@ -119,6 +119,9 @@ func startTimeout() time.Duration {
 }
 
 func smokeTestEnabled() bool {
+	if value := strings.TrimSpace(os.Getenv("DSH_SMOKE_TEST")); value == "1" || strings.EqualFold(value, "true") {
+		return true
+	}
 	for _, argument := range os.Args[1:] {
 		if argument == "--smoke-test" {
 			return true

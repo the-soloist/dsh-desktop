@@ -55,21 +55,27 @@ export async function createAndVerifyArchive(
 }
 
 export async function runSmokeTest(
-	context: BuildContext,
+  context: BuildContext,
   executable: string,
   environment: Record<string, string> = {},
 ): Promise<void> {
   console.log("Running startup smoke test");
-  const smokeEnvironment = { DSH_SMOKE_TEST_SECONDS: "5", ...environment };
+  // GTK parses application arguments before Wails starts and rejects unknown
+  // options, so packaged GUI smoke mode is enabled exclusively via env vars.
+  const smokeEnvironment = {
+    DSH_SMOKE_TEST: "1",
+    DSH_SMOKE_TEST_SECONDS: "5",
+    ...environment,
+  };
   if (context.platform === "linux") {
     const xvfbRun = Bun.which("xvfb-run");
     if (!xvfbRun) {
       throw new Error("xvfb-run was not found; it is required for the Linux smoke test");
     }
-    await run(xvfbRun, ["-a", executable, "--smoke-test"], { env: smokeEnvironment });
+    await run(xvfbRun, ["-a", "--", executable], { env: smokeEnvironment });
     return;
   }
-  await run(executable, ["--smoke-test"], { env: smokeEnvironment });
+  await run(executable, [], { env: smokeEnvironment });
 }
 
 async function resetDirectory(context: BuildContext, directory: string): Promise<void> {

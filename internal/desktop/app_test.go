@@ -105,3 +105,10 @@ func TestPageReloadKeyBindings(t *testing.T) {
 		t.Fatalf("page reload binding count = %d, want 2", len(bindings))
 	}
 }
+
+func TestSmokeTestEnabledUsesEnvironment(t *testing.T) {
+	t.Setenv("DSH_SMOKE_TEST", "true")
+	if !smokeTestEnabled() {
+		t.Fatal("smokeTestEnabled() = false, want true")
+	}
+}
