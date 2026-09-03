@@ -9,6 +9,7 @@ import (
 
 	"github.com/tc-hib/winres"
 	"github.com/tc-hib/winres/version"
+	dshdesktop "github.com/the-soloist/dsh-desktop"
 )
 
 func main() {
@@ -25,6 +26,10 @@ func main() {
 }
 
 func generateResources(inputPath, icoPath, resourcePath, architecture string) error {
+	applicationVersion, err := dshdesktop.CurrentVersion()
+	if err != nil {
+		return fmt.Errorf("parse embedded VERSION: %w", err)
+	}
 	input, err := os.Open(inputPath)
 	if err != nil {
 		return fmt.Errorf("open icon: %w", err)
@@ -69,9 +74,15 @@ func generateResources(inputPath, icoPath, resourcePath, architecture string) er
 		LongPathAware:       true,
 		UseCommonControlsV6: true,
 	})
+	resourceVersion := [4]uint16{
+		applicationVersion.Major,
+		applicationVersion.Minor,
+		applicationVersion.Patch,
+		0,
+	}
 	versionInfo := version.Info{
-		FileVersion:    [4]uint16{0, 1, 0, 0},
-		ProductVersion: [4]uint16{0, 1, 0, 0},
+		FileVersion:    resourceVersion,
+		ProductVersion: resourceVersion,
 	}
 	versionInfo.Set(0, version.ProductName, "DSH Desktop")
 	versionInfo.Set(0, version.FileDescription, "Desktop client for DeepSeek DSH")

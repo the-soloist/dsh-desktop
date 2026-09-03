@@ -8,11 +8,13 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
+import embeddedVersion from "./VERSION" with { type: "text" };
 
 const repositoryRoot = import.meta.dir;
 const distRoot = path.join(repositoryRoot, "dist");
 const iconPath = path.join(repositoryRoot, "internal", "appicon", "dsh-desktop-icon.png");
 const applicationPackage = "./cmd/dsh-desktop";
+const applicationVersion = parseApplicationVersion(embeddedVersion);
 const smokeTest = process.argv.slice(2).includes("--smoke-test");
 const unknownArguments = process.argv
   .slice(2)
@@ -296,6 +298,20 @@ function validateNativeTarget(targetPlatform: PlatformName, targetArchitecture: 
   }
 }
 
+function parseApplicationVersion(value: string): string {
+  const version = value.trim();
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.exec(version);
+  if (!match) {
+    throw new Error(`Invalid VERSION: ${JSON.stringify(version)}`);
+  }
+  for (const component of match.slice(1)) {
+    if (Number(component) > 65_535) {
+      throw new Error(`VERSION component exceeds 65535: ${component}`);
+    }
+  }
+  return version;
+}
+
 function macOSInfoPlist(): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -318,9 +334,9 @@ function macOSInfoPlist(): string {
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>${applicationVersion}</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>${applicationVersion}</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>NSAppTransportSecurity</key>
