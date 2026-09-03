@@ -28,7 +28,7 @@ export async function buildMacOS(context: BuildContext): Promise<void> {
   await run(
     "go",
     ["run", "./scripts/macos-icon", "-input", context.iconPath, "-output", icon],
-    { cwd: context.repositoryRoot, env: goToolEnvironment(context) },
+    { cwd: context.repositoryRoot, env: goToolEnvironment() },
   );
   await writeFile(path.join(contents, "Info.plist"), macOSInfoPlist(context.metadata, context.version), "utf8");
   await run("codesign", ["--force", "--deep", "--sign", "-", bundle]);

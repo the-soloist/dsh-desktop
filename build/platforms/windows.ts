@@ -29,7 +29,7 @@ export async function buildWindows(context: BuildContext): Promise<void> {
       "-arch",
       "amd64",
     ],
-    { cwd: context.repositoryRoot, env: goToolEnvironment(context) },
+    { cwd: context.repositoryRoot, env: goToolEnvironment() },
   );
   await buildGoBinary(context, executable, { CGO_ENABLED: "0" }, "./dist/intermediate/windows/windows-source");
   await createAndVerifyArchive(context.archivePath, packageDirectory, executableName);

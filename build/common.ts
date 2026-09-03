@@ -32,12 +32,12 @@ export async function buildGoBinary(
       output,
       packageName,
     ],
-    { cwd: context.repositoryRoot, env: { ...goToolEnvironment(context), ...environment } },
+    { cwd: context.repositoryRoot, env: { ...goToolEnvironment(), ...environment } },
   );
 }
 
-export function goToolEnvironment(context: BuildContext): Record<string, string> {
-  return { GOCACHE: path.join(context.intermediate, "go-cache"), GOTELEMETRY: "off" };
+export function goToolEnvironment(): Record<string, string> {
+  return { GOTELEMETRY: "off" };
 }
 
 export async function createAndVerifyArchive(
