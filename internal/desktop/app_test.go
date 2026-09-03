@@ -1,6 +1,13 @@
 package desktop
 
-import "testing"
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestNormaliseWindowState(t *testing.T) {
 	tests := []struct {
@@ -45,5 +52,48 @@ func TestSetEnvironmentReplacesExistingValue(t *testing.T) {
 		if got[index] != want[index] {
 			t.Fatalf("setEnvironment()[%d] = %q, want %q", index, got[index], want[index])
 		}
+	}
+}
+
+func TestPrependExecutablePaths(t *testing.T) {
+	first := filepath.Join("", "opt", "homebrew", "bin")
+	existing := filepath.Join("", "usr", "bin")
+	separator := string(os.PathListSeparator)
+	environment := []string{"OTHER=value", "PATH=" + existing}
+
+	got := prependExecutablePaths(environment, first, first)
+	gotPath := environmentValue(got, "PATH")
+	wantPath := strings.Join([]string{first, existing}, separator)
+	if gotPath != wantPath {
+		t.Fatalf("PATH = %q, want %q", gotPath, wantPath)
+	}
+	if len(got) != len(environment) {
+		t.Fatalf("environment length = %d, want %d: %#v", len(got), len(environment), got)
+	}
+}
+
+func TestWaitForDSHRequiresStableReadiness(t *testing.T) {
+	process := &managedProcess{done: make(chan struct{})}
+	checks := 0
+	err := waitForDSHWithProbe(process, 100*time.Millisecond, time.Millisecond, 4*time.Millisecond, func() bool {
+		checks++
+		return checks != 2
+	})
+	if err != nil {
+		t.Fatalf("waitForDSHWithProbe() error = %v", err)
+	}
+	if checks < 5 {
+		t.Fatalf("readiness checks = %d, want at least 5", checks)
+	}
+}
+
+func TestWaitForDSHReportsExitDuringStabilityWindow(t *testing.T) {
+	process := &managedProcess{done: make(chan struct{})}
+	process.waitErr = errors.New("backend failed")
+	close(process.done)
+
+	err := waitForDSHWithProbe(process, time.Second, time.Millisecond, 10*time.Millisecond, func() bool { return true })
+	if err == nil || !strings.Contains(err.Error(), "backend failed") {
+		t.Fatalf("waitForDSHWithProbe() error = %v, want backend failure", err)
 	}
 }

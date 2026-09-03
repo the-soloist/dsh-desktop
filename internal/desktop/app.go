@@ -35,6 +35,7 @@ const (
 	minimumHeight      = 560
 	defaultStartWait   = 5 * time.Minute
 	readinessInterval  = 250 * time.Millisecond
+	readinessStability = time.Second
 	requestTimeout     = 2 * time.Second
 	processStopTimeout = 5 * time.Second
 )
@@ -89,9 +90,11 @@ func run() error {
 	logger.Printf("using bunx: %s", bunxPath)
 
 	environment, dshHome := dshEnvironment(os.Environ())
+	environment = prependExecutablePaths(environment, executableSearchPaths(bunxPath)...)
 	if dshHome != "" {
 		logger.Printf("using DSH_HOME: %s", dshHome)
 	}
+	logger.Printf("DSH executable search path: %s", environmentValue(environment, "PATH"))
 
 	var backend *managedProcess
 	if isDSHReady() {
@@ -154,6 +157,7 @@ func run() error {
 
 	window := app.Window.NewWithOptions(windowOptions)
 	var quitting atomic.Bool
+	var appStarted atomic.Bool
 	captureNormalGeometry := func() {
 		if window.IsMaximised() || window.IsMinimised() || window.IsFullscreen() {
 			return
@@ -210,7 +214,9 @@ func run() error {
 		}
 		saveWindowState()
 		logger.Printf("complete application exit requested")
-		app.Quit()
+		if appStarted.Load() {
+			app.Quit()
+		}
 	}
 
 	window.RegisterHook(events.Common.WindowClosing, func(event *application.WindowEvent) {
@@ -237,7 +243,12 @@ func run() error {
 	})
 
 	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
+		appStarted.Store(true)
 		logger.Printf("desktop window started")
+		if quitting.Load() {
+			app.Quit()
+			return
+		}
 		if startupConsoleOwned {
 			hideStartupConsole()
 		}
@@ -359,6 +370,79 @@ func setEnvironment(environment []string, key, value string) []string {
 	return append(result, key+"="+value)
 }
 
+func environmentValue(environment []string, key string) string {
+	for _, item := range environment {
+		name, value, found := strings.Cut(item, "=")
+		if found && strings.EqualFold(name, key) {
+			return value
+		}
+	}
+	return ""
+}
+
+func executableSearchPaths(bunxPath string) []string {
+	paths := []string{filepath.Dir(bunxPath)}
+	home := ""
+	home, err := os.UserHomeDir()
+	if err == nil {
+		paths = append(paths,
+			filepath.Join(home, ".bun", "bin"),
+			filepath.Join(home, ".local", "bin"),
+			filepath.Join(home, ".local", "share", "fnm", "aliases", "default", "bin"),
+			filepath.Join(home, ".nvm", "current", "bin"),
+		)
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		paths = append(paths, "/opt/homebrew/bin", "/usr/local/bin")
+	case "linux":
+		if homebrewPrefix := strings.TrimSpace(os.Getenv("HOMEBREW_PREFIX")); homebrewPrefix != "" {
+			paths = append(paths, filepath.Join(homebrewPrefix, "bin"))
+		}
+		if home != "" {
+			paths = append(paths, filepath.Join(home, ".linuxbrew", "bin"))
+		}
+		paths = append(paths,
+			"/home/linuxbrew/.linuxbrew/bin",
+			"/usr/local/bin",
+			"/usr/bin",
+			"/snap/bin",
+		)
+	case "windows":
+		for _, root := range []string{os.Getenv("ProgramFiles"), os.Getenv("ProgramFiles(x86)")} {
+			if root != "" {
+				paths = append(paths, filepath.Join(root, "nodejs"))
+			}
+		}
+		if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
+			paths = append(paths, filepath.Join(localAppData, "Programs", "nodejs"))
+		}
+	}
+	return paths
+}
+
+func prependExecutablePaths(environment []string, paths ...string) []string {
+	existing := filepath.SplitList(environmentValue(environment, "PATH"))
+	combined := make([]string, 0, len(paths)+len(existing))
+	seen := make(map[string]struct{}, len(paths)+len(existing))
+	for _, path := range append(paths, existing...) {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		key := filepath.Clean(path)
+		if runtime.GOOS == "windows" {
+			key = strings.ToLower(key)
+		}
+		if _, found := seen[key]; found {
+			continue
+		}
+		seen[key] = struct{}{}
+		combined = append(combined, path)
+	}
+	return setEnvironment(environment, "PATH", strings.Join(combined, string(os.PathListSeparator)))
+}
+
 func dshWorkspace() (string, error) {
 	if configured := strings.TrimSpace(os.Getenv("DSH_WORKSPACE")); configured != "" {
 		path, err := filepath.Abs(configured)
@@ -429,14 +513,32 @@ func (process *managedProcess) Stop(logger *log.Logger) {
 }
 
 func waitForDSH(process *managedProcess, timeout time.Duration) error {
+	return waitForDSHWithProbe(process, timeout, readinessInterval, readinessStability, isDSHReady)
+}
+
+func waitForDSHWithProbe(
+	process *managedProcess,
+	timeout time.Duration,
+	interval time.Duration,
+	stability time.Duration,
+	probe func() bool,
+) error {
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
-	ticker := time.NewTicker(readinessInterval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	var readySince time.Time
 
 	for {
-		if isDSHReady() {
-			return nil
+		if probe() {
+			if readySince.IsZero() {
+				readySince = time.Now()
+			}
+			if time.Since(readySince) >= stability {
+				return nil
+			}
+		} else {
+			readySince = time.Time{}
 		}
 		select {
 		case <-process.done:
