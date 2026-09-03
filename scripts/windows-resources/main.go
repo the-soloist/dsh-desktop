@@ -14,7 +14,7 @@ import (
 
 func main() {
 	input := flag.String("input", "internal/appicon/dsh-desktop-icon.png", "source PNG")
-	icoOutput := flag.String("ico", "dist/intermediate/windows/DshDesktop.ico", "ICO output")
+	icoOutput := flag.String("ico", "dist/intermediate/windows/DSH Desktop.ico", "ICO output")
 	resourceOutput := flag.String("syso", "dist/intermediate/windows/rsrc_windows_amd64.syso", "COFF resource output")
 	architecture := flag.String("arch", "amd64", "target architecture")
 	flag.Parse()
@@ -86,7 +86,7 @@ func generateResources(inputPath, icoPath, resourcePath, architecture string) er
 	}
 	versionInfo.Set(0, version.ProductName, "DSH Desktop")
 	versionInfo.Set(0, version.FileDescription, "Desktop client for DeepSeek DSH")
-	versionInfo.Set(0, version.OriginalFilename, "DshDesktop.exe")
+	versionInfo.Set(0, version.OriginalFilename, "DSH Desktop.exe")
 	resourceSet.SetVersionInfo(versionInfo)
 
 	arch, ok := map[string]winres.Arch{

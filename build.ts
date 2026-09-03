@@ -14,6 +14,8 @@ const repositoryRoot = import.meta.dir;
 const distRoot = path.join(repositoryRoot, "dist");
 const iconPath = path.join(repositoryRoot, "internal", "appicon", "dsh-desktop-icon.png");
 const applicationPackage = "./cmd/dsh-desktop";
+const applicationName = "DSH Desktop";
+const archiveProductName = applicationName.replaceAll(" ", "-");
 const applicationVersion = parseApplicationVersion(embeddedVersion);
 const smokeTest = process.argv.slice(2).includes("--smoke-test");
 const unknownArguments = process.argv
@@ -32,14 +34,14 @@ validateNativeTarget(platform, architecture);
 
 const platformOutput = path.join(distRoot, platform);
 const intermediate = path.join(distRoot, "intermediate", platform);
-const archiveName = `DshDesktop-${platform}-${architecture}.7z`;
+const archiveName = `${archiveProductName}-${platform}-${architecture}.7z`;
 const archivePath = path.join(platformOutput, archiveName);
 
 await mkdir(distRoot, { recursive: true });
 await resetDirectory(intermediate);
 await resetDirectory(platformOutput);
 
-console.log(`Building DshDesktop for ${platform}/${architecture}`);
+console.log(`Building ${applicationName} for ${platform}/${architecture}`);
 
 switch (platform) {
   case "macos":
@@ -57,12 +59,13 @@ console.log(`Package ready: ${path.relative(repositoryRoot, archivePath)}`);
 
 async function buildMacOS(): Promise<void> {
   const binary = path.join(intermediate, "DshDesktop-binary");
-  const applicationBundle = path.join(platformOutput, "DshDesktop.app");
+  const applicationBundleName = `${applicationName}.app`;
+  const applicationBundle = path.join(platformOutput, applicationBundleName);
   const contents = path.join(applicationBundle, "Contents");
   const macOSDirectory = path.join(contents, "MacOS");
   const resourcesDirectory = path.join(contents, "Resources");
-  const packagedBinary = path.join(macOSDirectory, "DshDesktop");
-  const icnsIcon = path.join(resourcesDirectory, "DshDesktop.icns");
+  const packagedBinary = path.join(macOSDirectory, applicationName);
+  const icnsIcon = path.join(resourcesDirectory, `${applicationName}.icns`);
 
   await buildGoBinary(binary, {
     CGO_ENABLED: "1",
@@ -79,7 +82,7 @@ async function buildMacOS(): Promise<void> {
 
   await run("codesign", ["--force", "--deep", "--sign", "-", applicationBundle]);
   await run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", applicationBundle]);
-  await createAndVerifyArchive(archivePath, platformOutput, "DshDesktop.app");
+  await createAndVerifyArchive(archivePath, platformOutput, applicationBundleName);
 
   if (smokeTest) {
     await runSmokeTest(packagedBinary);
@@ -89,15 +92,16 @@ async function buildMacOS(): Promise<void> {
 async function buildLinux(): Promise<void> {
   const appDir = path.join(intermediate, "DshDesktop.AppDir");
   const binaryDirectory = path.join(appDir, "usr", "bin");
-  const binary = path.join(binaryDirectory, "DshDesktop");
+  const binary = path.join(binaryDirectory, applicationName);
   const desktopFile = "dshdesktop.desktop";
   const iconFile = "dshdesktop.png";
-  const appImage = path.join(platformOutput, "DshDesktop.AppImage");
+  const appImageName = `${applicationName}.AppImage`;
+  const appImage = path.join(platformOutput, appImageName);
 
   await mkdir(binaryDirectory, { recursive: true });
   await buildGoBinary(binary, { CGO_ENABLED: "1" });
   await chmod(binary, 0o755);
-  await symlink("usr/bin/DshDesktop", path.join(appDir, "AppRun"));
+  await symlink(`usr/bin/${applicationName}`, path.join(appDir, "AppRun"));
   await writeFile(path.join(appDir, desktopFile), linuxDesktopEntry(), "utf8");
   await copyFile(iconPath, path.join(appDir, iconFile));
 
@@ -126,7 +130,7 @@ async function buildLinux(): Promise<void> {
   });
   await chmod(appImage, 0o755);
   await run("file", [appImage]);
-  await createAndVerifyArchive(archivePath, platformOutput, "DshDesktop.AppImage");
+  await createAndVerifyArchive(archivePath, platformOutput, appImageName);
 
   if (smokeTest) {
     await runSmokeTest(appImage, { APPIMAGE_EXTRACT_AND_RUN: "1" });
@@ -136,8 +140,9 @@ async function buildLinux(): Promise<void> {
 async function buildWindows(): Promise<void> {
   const packageDirectory = path.join(intermediate, "package");
   const sourceDirectory = path.join(intermediate, "windows-source");
-  const executable = path.join(packageDirectory, "DshDesktop.exe");
-  const icoIcon = path.join(intermediate, "DshDesktop.ico");
+  const executableName = `${applicationName}.exe`;
+  const executable = path.join(packageDirectory, executableName);
+  const icoIcon = path.join(intermediate, `${applicationName}.ico`);
   const resourceObject = path.join(sourceDirectory, "rsrc_windows_amd64.syso");
 
   await mkdir(packageDirectory, { recursive: true });
@@ -160,7 +165,7 @@ async function buildWindows(): Promise<void> {
     { env: goToolEnvironment() },
   );
   await buildGoBinary(executable, { CGO_ENABLED: "0" }, "./dist/intermediate/windows/windows-source");
-  await createAndVerifyArchive(archivePath, packageDirectory, "DshDesktop.exe");
+  await createAndVerifyArchive(archivePath, packageDirectory, executableName);
 
   if (smokeTest) {
     await runSmokeTest(executable);
@@ -320,17 +325,17 @@ function macOSInfoPlist(): string {
   <key>CFBundleDevelopmentRegion</key>
   <string>zh_CN</string>
   <key>CFBundleDisplayName</key>
-  <string>DSH Desktop</string>
+  <string>${applicationName}</string>
   <key>CFBundleExecutable</key>
-  <string>DshDesktop</string>
+  <string>${applicationName}</string>
   <key>CFBundleIdentifier</key>
   <string>io.github.the-soloist.dsh-desktop</string>
   <key>CFBundleIconFile</key>
-  <string>DshDesktop.icns</string>
+  <string>${applicationName}.icns</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>DshDesktop</string>
+  <string>${applicationName}</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -356,9 +361,9 @@ function macOSInfoPlist(): string {
 function linuxDesktopEntry(): string {
   return `[Desktop Entry]
 Type=Application
-Name=DSH Desktop
+Name=${applicationName}
 Comment=Desktop client for DeepSeek DSH
-Exec=DshDesktop
+Exec="${applicationName}"
 Icon=dshdesktop
 Categories=Development;
 Terminal=false

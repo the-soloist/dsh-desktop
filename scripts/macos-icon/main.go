@@ -12,7 +12,7 @@ import (
 
 func main() {
 	inputPath := flag.String("input", "internal/appicon/dsh-desktop-icon.png", "source PNG")
-	outputPath := flag.String("output", "dist/intermediate/macos/DshDesktop.icns", "ICNS output")
+	outputPath := flag.String("output", "dist/intermediate/macos/DSH Desktop.icns", "ICNS output")
 	flag.Parse()
 
 	if err := generateICNS(*inputPath, *outputPath); err != nil {

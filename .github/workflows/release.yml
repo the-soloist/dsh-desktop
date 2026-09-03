@@ -40,23 +40,23 @@ jobs:
           - os: macos-15-intel
             platform: macOS
             arch: x86_64
-            artifact: DshDesktop-macos-x86_64
-            path: dist/macos/DshDesktop-macos-x86_64.7z
+            artifact: DSH-Desktop-macos-x86_64
+            path: dist/macos/DSH-Desktop-macos-x86_64.7z
           - os: macos-latest
             platform: macOS
             arch: arm64
-            artifact: DshDesktop-macos-arm64
-            path: dist/macos/DshDesktop-macos-arm64.7z
+            artifact: DSH-Desktop-macos-arm64
+            path: dist/macos/DSH-Desktop-macos-arm64.7z
           - os: ubuntu-latest
             platform: Linux
             arch: x86_64
-            artifact: DshDesktop-linux-x86_64
-            path: dist/linux/DshDesktop-linux-x86_64.7z
+            artifact: DSH-Desktop-linux-x86_64
+            path: dist/linux/DSH-Desktop-linux-x86_64.7z
           - os: windows-latest
             platform: Windows
             arch: x86_64
-            artifact: DshDesktop-windows-x86_64
-            path: dist/windows/DshDesktop-windows-x86_64.7z
+            artifact: DSH-Desktop-windows-x86_64
+            path: dist/windows/DSH-Desktop-windows-x86_64.7z
 
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -153,7 +153,7 @@ jobs:
         shell: bash
         run: |
           cd dist
-          find . -maxdepth 1 -type f -name 'DshDesktop-*.7z' -print0 \
+          find . -maxdepth 1 -type f -name 'DSH-Desktop-*.7z' -print0 \
             | sort -z \
             | xargs -0 sha256sum > SHA256SUMS.txt
           test -s SHA256SUMS.txt
