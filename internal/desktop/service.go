@@ -35,29 +35,43 @@ func (controller *controller) runServiceAction(restart bool) {
 		return
 	}
 
-	controller.setStartupStatus("正在检查运行环境", "正在查找 bunx 与 Node.js…", false)
-	bunxPath, err := dshenv.FindBunx()
+	controller.setStartupStatus("正在检查运行环境", "正在读取环境并查找 bunx 与 Node.js…", false)
+	runtimeEnvironment, err := dshenv.Resolve(os.Environ())
+	if runtimeEnvironment.ShellError != nil {
+		controller.logger.Printf("cannot load shell environment: %v", runtimeEnvironment.ShellError)
+	} else if runtimeEnvironment.Shell.Shell != "" && len(runtimeEnvironment.Shell.Sources) > 0 {
+		controller.logger.Printf(
+			"loaded %d environment variables from %s using %s",
+			len(runtimeEnvironment.Shell.Variables),
+			strings.Join(runtimeEnvironment.Shell.Sources, ", "),
+			runtimeEnvironment.Shell.Shell,
+		)
+	}
 	if err != nil {
-		controller.showStartupFailure("未找到 bunx。请先安装 Bun，并确保 bunx 已加入 PATH。", err)
+		switch {
+		case errors.Is(err, dshenv.ErrBunxNotFound):
+			controller.showStartupFailure("未找到 bunx。请先安装 Bun，并配置 DSH_BUNX_PATH、BUN_INSTALL、XDG 路径或 PATH。", err)
+		case errors.Is(err, dshenv.ErrNodeNotFound):
+			controller.showStartupFailure("未找到 Node.js。请配置 DSH_NODE_PATH、Node 版本管理器、XDG 路径或 PATH。", err)
+		default:
+			controller.showStartupFailure("无法确定 DSH 工作目录。", err)
+		}
 		return
 	}
-	controller.logger.Printf("using bunx: %s", bunxPath)
-
-	environment, dshHome := dshenv.BuildEnvironment(os.Environ(), bunxPath)
-	if dshHome != "" {
-		controller.logger.Printf("using DSH_HOME: %s", dshHome)
+	controller.logger.Printf("using bunx: %s", runtimeEnvironment.BunxPath)
+	controller.logger.Printf("using Node.js: %s", runtimeEnvironment.NodePath)
+	if runtimeEnvironment.DSHHome != "" {
+		controller.logger.Printf("using DSH_HOME: %s", runtimeEnvironment.DSHHome)
 	}
-	controller.logger.Printf("DSH executable search path: %s", dshenv.EnvironmentValue(environment, "PATH"))
-	if _, err = dshenv.FindNode(environment); err != nil {
-		controller.showStartupFailure("未找到 Node.js。当前 DSH 命令需要 Node.js，请安装后重试。", err)
-		return
-	}
-	workspace, err := dshenv.Workspace()
-	if err != nil {
-		controller.showStartupFailure("无法确定 DSH 工作目录。", err)
-		return
-	}
-	controller.launchDSH(bunxPath, workspace, environment)
+	controller.logger.Printf(
+		"DSH executable search path: %s",
+		dshenv.EnvironmentValue(runtimeEnvironment.Environment, "PATH"),
+	)
+	controller.launchDSH(
+		runtimeEnvironment.BunxPath,
+		runtimeEnvironment.Workspace,
+		runtimeEnvironment.Environment,
+	)
 }
 
 func (controller *controller) prepareRestart() bool {

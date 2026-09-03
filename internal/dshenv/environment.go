@@ -1,68 +1,68 @@
-// Package dshenv resolves the executables, environment, and workspace needed
-// to start DSH from a desktop application with a limited GUI PATH.
+// Package dshenv resolves the environment, executables, and workspace needed
+// to start DSH from a desktop application with a limited GUI environment.
 package dshenv
 
 import (
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 )
 
-// FindBunx locates bunx in PATH and common per-user installation locations.
-func FindBunx() (string, error) {
-	if configured := strings.TrimSpace(os.Getenv("DSH_BUNX_PATH")); configured != "" {
-		path, err := filepath.Abs(configured)
-		if err == nil && isExecutableFile(path) {
-			return path, nil
-		}
-	}
-	if path, err := exec.LookPath("bunx"); err == nil {
-		return filepath.Abs(path)
-	}
+var (
+	ErrBunxNotFound = errors.New("bunx was not found")
+	ErrNodeNotFound = errors.New("Node.js was not found")
+	ErrWorkspace    = errors.New("DSH workspace is invalid")
+)
 
-	home, err := os.UserHomeDir()
+// Runtime contains the complete environment and paths used to launch DSH.
+type Runtime struct {
+	Environment []string
+	BunxPath    string
+	NodePath    string
+	DSHHome     string
+	Workspace   string
+	Shell       ShellImport
+	ShellError  error
+}
+
+// Resolve builds one consistent DSH runtime from the platform environment.
+// Shell loading is best-effort; executable and workspace failures are fatal.
+func Resolve(base []string) (Runtime, error) {
+	environment, shell, shellErr := LoadShellEnvironment(base)
+	result := Runtime{Environment: environment, Shell: shell, ShellError: shellErr}
+
+	bunxPath, err := FindBunx(environment)
 	if err != nil {
-		return "", err
+		return result, fmt.Errorf("%w: %v", ErrBunxNotFound, err)
 	}
-	candidates := []string{filepath.Join(home, ".bun", "bin", executableName("bunx"))}
-	if runtime.GOOS == "darwin" {
-		candidates = append(candidates,
-			filepath.Join("/opt/homebrew/bin", executableName("bunx")),
-			filepath.Join("/usr/local/bin", executableName("bunx")),
-		)
+	nodePath, err := FindNode(environment)
+	if err != nil {
+		return result, fmt.Errorf("%w: %v", ErrNodeNotFound, err)
 	}
-	for _, candidate := range candidates {
-		if isExecutableFile(candidate) {
-			return candidate, nil
-		}
+	environment, dshHome := withDSHHome(environment)
+	environment = PrependExecutablePaths(
+		environment,
+		runtimeExecutablePaths(environment, bunxPath, nodePath)...,
+	)
+	workspace, err := Workspace(environment)
+	if err != nil {
+		return result, fmt.Errorf("%w: %v", ErrWorkspace, err)
 	}
-	return "", exec.ErrNotFound
+
+	result.Environment = environment
+	result.BunxPath = bunxPath
+	result.NodePath = nodePath
+	result.DSHHome = dshHome
+	result.Workspace = workspace
+	return result, nil
 }
 
-// BuildEnvironment adds DSH_HOME when the user's XDG dsh directory exists and
-// restores common executable paths omitted from GUI application environments.
-func BuildEnvironment(base []string, bunxPath string) ([]string, string) {
-	environment, dshHome := withDSHHome(base)
-	return PrependExecutablePaths(environment, executableSearchPaths(bunxPath)...), dshHome
-}
-
-// FindNode locates the Node.js interpreter in the prepared child environment.
-func FindNode(environment []string) (string, error) {
-	for _, directory := range filepath.SplitList(EnvironmentValue(environment, "PATH")) {
-		candidate := filepath.Join(directory, executableName("node"))
-		if isExecutableFile(candidate) {
-			return candidate, nil
-		}
-	}
-	return "", fmt.Errorf("node: %w", exec.ErrNotFound)
-}
-
-// Workspace resolves DSH_WORKSPACE or falls back to the user's home directory.
-func Workspace() (string, error) {
-	if configured := strings.TrimSpace(os.Getenv("DSH_WORKSPACE")); configured != "" {
+// Workspace resolves DSH_WORKSPACE or falls back to the prepared HOME.
+func Workspace(environment []string) (string, error) {
+	if configured := strings.TrimSpace(EnvironmentValue(environment, "DSH_WORKSPACE")); configured != "" {
 		path, err := filepath.Abs(configured)
 		if err != nil {
 			return "", fmt.Errorf("invalid DSH_WORKSPACE: %w", err)
@@ -73,23 +73,35 @@ func Workspace() (string, error) {
 		}
 		return path, nil
 	}
-	return os.UserHomeDir()
+	return homeDirectory(environment)
 }
 
-func withDSHHome(base []string) ([]string, string) {
-	home, err := os.UserHomeDir()
+func withDSHHome(environment []string) ([]string, string) {
+	if configured := strings.TrimSpace(EnvironmentValue(environment, "DSH_HOME")); configured != "" {
+		return environment, configured
+	}
+	if configHome := strings.TrimSpace(EnvironmentValue(environment, "XDG_CONFIG_HOME")); configHome != "" {
+		if dshHome := existingDirectory(filepath.Join(configHome, "dsh")); dshHome != "" {
+			return SetEnvironment(environment, "DSH_HOME", dshHome), dshHome
+		}
+	}
+	home, err := homeDirectory(environment)
 	if err != nil {
-		return base, ""
+		return environment, ""
 	}
-	configHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME"))
-	if configHome == "" {
-		configHome = filepath.Join(home, ".config")
+	dshHome := existingDirectory(filepath.Join(home, ".config", "dsh"))
+	if dshHome == "" {
+		return environment, ""
 	}
-	dshHome := filepath.Join(configHome, "dsh")
-	if info, err := os.Stat(dshHome); err != nil || !info.IsDir() {
-		return base, ""
+	return SetEnvironment(environment, "DSH_HOME", dshHome), dshHome
+}
+
+func existingDirectory(path string) string {
+	info, err := os.Stat(path)
+	if err != nil || !info.IsDir() {
+		return ""
 	}
-	return SetEnvironment(base, "DSH_HOME", dshHome), dshHome
+	return path
 }
 
 // SetEnvironment replaces key with one value while preserving other entries.
@@ -143,52 +155,11 @@ func PrependExecutablePaths(environment []string, paths ...string) []string {
 	return SetEnvironment(environment, "PATH", strings.Join(combined, string(os.PathListSeparator)))
 }
 
-func executableSearchPaths(bunxPath string) []string {
-	paths := []string{filepath.Dir(bunxPath)}
-	home, err := os.UserHomeDir()
-	if err == nil {
-		paths = append(paths,
-			filepath.Join(home, ".bun", "bin"),
-			filepath.Join(home, ".local", "bin"),
-			filepath.Join(home, ".local", "share", "fnm", "aliases", "default", "bin"),
-			filepath.Join(home, ".nvm", "current", "bin"),
-		)
-	}
-	switch runtime.GOOS {
-	case "darwin":
-		paths = append(paths, "/opt/homebrew/bin", "/usr/local/bin")
-	case "linux":
-		if homebrewPrefix := strings.TrimSpace(os.Getenv("HOMEBREW_PREFIX")); homebrewPrefix != "" {
-			paths = append(paths, filepath.Join(homebrewPrefix, "bin"))
-		}
-		if home != "" {
-			paths = append(paths, filepath.Join(home, ".linuxbrew", "bin"))
-		}
-		paths = append(paths, "/home/linuxbrew/.linuxbrew/bin", "/usr/local/bin", "/usr/bin", "/snap/bin")
-	case "windows":
-		for _, root := range []string{os.Getenv("ProgramFiles"), os.Getenv("ProgramFiles(x86)")} {
-			if root != "" {
-				paths = append(paths, filepath.Join(root, "nodejs"))
-			}
-		}
-		if localAppData := os.Getenv("LOCALAPPDATA"); localAppData != "" {
-			paths = append(paths, filepath.Join(localAppData, "Programs", "nodejs"))
+func homeDirectory(environment []string) (string, error) {
+	for _, name := range []string{"HOME", "USERPROFILE"} {
+		if home := strings.TrimSpace(EnvironmentValue(environment, name)); home != "" {
+			return home, nil
 		}
 	}
-	return paths
-}
-
-func executableName(name string) string {
-	if runtime.GOOS == "windows" {
-		return name + ".exe"
-	}
-	return name
-}
-
-func isExecutableFile(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
-		return false
-	}
-	return runtime.GOOS == "windows" || info.Mode()&0o111 != 0
+	return os.UserHomeDir()
 }
