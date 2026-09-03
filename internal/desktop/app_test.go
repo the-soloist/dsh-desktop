@@ -97,3 +97,36 @@ func TestWaitForDSHReportsExitDuringStabilityWindow(t *testing.T) {
 		t.Fatalf("waitForDSHWithProbe() error = %v, want backend failure", err)
 	}
 }
+
+func TestPageReloadKeyBindings(t *testing.T) {
+	bindings := pageReloadKeyBindings()
+	for _, shortcut := range []string{"CmdOrCtrl+R", "F5"} {
+		if bindings[shortcut] == nil {
+			t.Fatalf("missing page reload binding %q", shortcut)
+		}
+	}
+	if len(bindings) != 2 {
+		t.Fatalf("page reload binding count = %d, want 2", len(bindings))
+	}
+}
+
+func TestManagedProcessState(t *testing.T) {
+	first := &managedProcess{}
+	second := &managedProcess{}
+	state := newManagedProcessState(first)
+
+	if state.clearIfCurrent(second) {
+		t.Fatal("clearIfCurrent() cleared a different process")
+	}
+	if got := state.take(); got != first {
+		t.Fatalf("take() = %p, want %p", got, first)
+	}
+	if got := state.take(); got != nil {
+		t.Fatalf("second take() = %p, want nil", got)
+	}
+
+	state.set(second)
+	if !state.clearIfCurrent(second) {
+		t.Fatal("clearIfCurrent() did not clear the current process")
+	}
+}

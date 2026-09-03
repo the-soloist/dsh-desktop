@@ -63,6 +63,39 @@ type managedProcess struct {
 	stopOnce sync.Once
 }
 
+type managedProcessState struct {
+	mu      sync.Mutex
+	current *managedProcess
+}
+
+func newManagedProcessState(process *managedProcess) *managedProcessState {
+	return &managedProcessState{current: process}
+}
+
+func (state *managedProcessState) set(process *managedProcess) {
+	state.mu.Lock()
+	state.current = process
+	state.mu.Unlock()
+}
+
+func (state *managedProcessState) take() *managedProcess {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	process := state.current
+	state.current = nil
+	return process
+}
+
+func (state *managedProcessState) clearIfCurrent(process *managedProcess) bool {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.current != process {
+		return false
+	}
+	state.current = nil
+	return true
+}
+
 // Main starts the desktop application and reports fatal startup errors using a
 // platform-native warning dialog.
 func Main() {
@@ -145,6 +178,7 @@ func run() error {
 		MinHeight:        minimumHeight,
 		InitialPosition:  application.WindowCentered,
 		BackgroundColour: application.NewRGB(18, 18, 18),
+		KeyBindings:      pageReloadKeyBindings(),
 	}
 	if initialState.HasPosition {
 		windowOptions.InitialPosition = application.WindowXY
@@ -156,8 +190,10 @@ func run() error {
 	}
 
 	window := app.Window.NewWithOptions(windowOptions)
+	backendState := newManagedProcessState(backend)
 	var quitting atomic.Bool
 	var appStarted atomic.Bool
+	var restarting atomic.Bool
 	captureNormalGeometry := func() {
 		if window.IsMaximised() || window.IsMinimised() || window.IsFullscreen() {
 			return
@@ -208,6 +244,16 @@ func run() error {
 		}
 		window.Show().Focus()
 	}
+	refreshPage := func() {
+		showWindow()
+		window.Reload()
+		logger.Printf("desktop page refreshed")
+	}
+	forceRefreshPage := func() {
+		showWindow()
+		window.ForceReload()
+		logger.Printf("desktop page force-refreshed")
+	}
 	quitApplication := func() {
 		if !quitting.CompareAndSwap(false, true) {
 			return
@@ -228,8 +274,89 @@ func run() error {
 		event.Cancel()
 	})
 
+	monitorBackend := func(process *managedProcess) {
+		go func() {
+			<-process.done
+			if !backendState.clearIfCurrent(process) || quitting.Load() {
+				return
+			}
+			message := "DSH 服务已停止，可从托盘菜单选择“重启 DSH”。"
+			if processErr := process.waitError(); processErr != nil {
+				logger.Printf("DSH process exited: %v", processErr)
+				message += "\n\n" + processErr.Error()
+			} else {
+				logger.Printf("DSH process exited")
+			}
+			showPlatformWarning(appName, message)
+		}()
+	}
+	restartDSH := func() {
+		if !restarting.CompareAndSwap(false, true) {
+			return
+		}
+		go func() {
+			defer restarting.Store(false)
+			logger.Printf("DSH restart requested")
+
+			current := backendState.take()
+			if current == nil && isDSHReady() {
+				showPlatformWarning(appName, "当前 DSH 服务由外部进程启动，DSH Desktop 不会终止它。")
+				return
+			}
+			if current != nil {
+				current.Stop(logger)
+			}
+			if quitting.Load() {
+				return
+			}
+
+			workspace, workspaceErr := dshWorkspace()
+			if workspaceErr != nil {
+				logger.Printf("cannot restart DSH: %v", workspaceErr)
+				showPlatformWarning(appName, "无法重启 DSH："+workspaceErr.Error())
+				return
+			}
+			next, startErr := startDSH(bunxPath, workspace, environment, logger.Writer())
+			if startErr != nil {
+				logger.Printf("cannot restart DSH: %v", startErr)
+				showPlatformWarning(appName, "无法重启 DSH："+startErr.Error())
+				return
+			}
+			backendState.set(next)
+			if quitting.Load() {
+				if backendState.clearIfCurrent(next) {
+					next.Stop(logger)
+				}
+				return
+			}
+			if waitErr := waitForDSH(next, startTimeout()); waitErr != nil {
+				if backendState.clearIfCurrent(next) {
+					next.Stop(logger)
+				}
+				if quitting.Load() {
+					return
+				}
+				logger.Printf("cannot restart DSH: %v", waitErr)
+				showPlatformWarning(appName, "无法重启 DSH："+waitErr.Error())
+				return
+			}
+			if quitting.Load() {
+				if backendState.clearIfCurrent(next) {
+					next.Stop(logger)
+				}
+				return
+			}
+			monitorBackend(next)
+			logger.Printf("DSH restarted and ready at %s", dshURL)
+			refreshPage()
+		}()
+	}
+
 	trayMenu := app.NewMenu()
 	trayMenu.Add("显示主窗口").OnClick(func(*application.Context) { showWindow() })
+	trayMenu.Add("刷新页面").OnClick(func(*application.Context) { refreshPage() })
+	trayMenu.Add("强制刷新").OnClick(func(*application.Context) { forceRefreshPage() })
+	trayMenu.Add("重启 DSH").OnClick(func(*application.Context) { restartDSH() })
 	trayMenu.Add("关闭窗口").OnClick(func(*application.Context) { closeWindow() })
 	trayMenu.AddSeparator()
 	trayMenu.Add("完全退出").OnClick(func(*application.Context) { quitApplication() })
@@ -269,19 +396,13 @@ func run() error {
 		if saveErr := store.save(); saveErr != nil {
 			logger.Printf("cannot save window state during shutdown: %v", saveErr)
 		}
-		if backend != nil {
-			backend.Stop(logger)
+		if process := backendState.take(); process != nil {
+			process.Stop(logger)
 		}
 	})
 
 	if backend != nil {
-		go func() {
-			<-backend.done
-			if backend.waitError() != nil {
-				logger.Printf("DSH process exited: %v", backend.waitError())
-			}
-			quitApplication()
-		}()
+		monitorBackend(backend)
 	}
 
 	if err = app.Run(); err != nil {
@@ -289,6 +410,14 @@ func run() error {
 	}
 	logger.Printf("application stopped")
 	return nil
+}
+
+func pageReloadKeyBindings() map[string]func(application.Window) {
+	reload := func(window application.Window) { window.Reload() }
+	return map[string]func(application.Window){
+		"CmdOrCtrl+R": reload,
+		"F5":          reload,
+	}
 }
 
 func findBunx() (string, error) {
