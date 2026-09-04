@@ -104,15 +104,7 @@ func run() error {
 		},
 	})
 	window := newWindowManager(app, stateStore, metadata.DisplayName, logger)
-	supervisor := backend.NewSupervisor(backend.Config{
-		URL:                metadata.DSHURL,
-		PageMarker:         metadata.DSHPageMarker,
-		ReadinessInterval:  readinessInterval,
-		ReadinessStability: readinessStability,
-		RequestTimeout:     requestTimeout,
-		StopTimeout:        processStopTimeout,
-		Logger:             logger,
-	})
+	supervisor := newBackendSupervisor(metadata, logger)
 	controller := newController(app, window, supervisor, metadata, logger, startupConsoleOwned)
 	controller.bind()
 
@@ -128,7 +120,7 @@ func startTimeout() time.Duration {
 }
 
 func smokeTestEnabled() bool {
-	if value := strings.TrimSpace(os.Getenv("DSH_SMOKE_TEST")); value == "1" || strings.EqualFold(value, "true") {
+	if environmentFlag("DSH_SMOKE_TEST") {
 		return true
 	}
 	for _, argument := range os.Args[1:] {
@@ -140,8 +132,7 @@ func smokeTestEnabled() bool {
 }
 
 func headlessSmokeTestEnabled() bool {
-	value := strings.TrimSpace(os.Getenv("DSH_HEADLESS_SMOKE_TEST"))
-	return value == "1" || strings.EqualFold(value, "true")
+	return environmentFlag("DSH_HEADLESS_SMOKE_TEST")
 }
 
 func smokeTestDuration() time.Duration {
@@ -154,4 +145,21 @@ func durationFromSeconds(name string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return time.Duration(seconds) * time.Second
+}
+
+func environmentFlag(name string) bool {
+	value := strings.TrimSpace(os.Getenv(name))
+	return value == "1" || strings.EqualFold(value, "true")
+}
+
+func newBackendSupervisor(metadata dshdesktop.Metadata, logger *log.Logger) *backend.Supervisor {
+	return backend.NewSupervisor(backend.Config{
+		URL:                metadata.DSHURL,
+		PageMarker:         metadata.DSHPageMarker,
+		ReadinessInterval:  readinessInterval,
+		ReadinessStability: readinessStability,
+		RequestTimeout:     requestTimeout,
+		StopTimeout:        processStopTimeout,
+		Logger:             logger,
+	})
 }

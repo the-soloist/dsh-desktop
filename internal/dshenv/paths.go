@@ -43,62 +43,40 @@ func findPackageRunner(
 // FindBunx resolves bunx using tool-specific variables, XDG paths, PATH, and
 // finally conventional platform paths, in that order.
 func FindBunx(environment []string) (string, error) {
-	if path, configured, err := configuredExecutable(environment, "DSH_BUNX_PATH"); configured {
-		return path, err
-	}
-	if path := executableInDirectories("bunx", bunToolPaths(environment)); path != "" {
-		return path, nil
-	}
-	if path := executableInDirectories("bunx", xdgExecutablePaths(environment)); path != "" {
-		return path, nil
-	}
-	if path := executableInPath(environment, "bunx"); path != "" {
-		return path, nil
-	}
-	if path := executableInDirectories("bunx", defaultBunPaths(environment)); path != "" {
-		return path, nil
-	}
-	return "", exec.ErrNotFound
+	return findExecutable(environment, "bunx", "DSH_BUNX_PATH", bunToolPaths, defaultBunPaths)
 }
 
 // FindNPX resolves npx using tool-specific variables, Node.js manager paths,
 // XDG paths, PATH, and conventional platform paths, in that order.
 func FindNPX(environment []string) (string, error) {
-	if path, configured, err := configuredExecutable(environment, "DSH_NPX_PATH"); configured {
-		return path, err
-	}
-	if path := executableInDirectories("npx", npmToolPaths(environment)); path != "" {
-		return path, nil
-	}
-	if path := executableInDirectories("npx", xdgExecutablePaths(environment)); path != "" {
-		return path, nil
-	}
-	if path := executableInPath(environment, "npx"); path != "" {
-		return path, nil
-	}
-	if path := executableInDirectories("npx", defaultNodePaths(environment)); path != "" {
-		return path, nil
-	}
-	return "", exec.ErrNotFound
+	return findExecutable(environment, "npx", "DSH_NPX_PATH", npmToolPaths, defaultNodePaths)
 }
 
 // FindNode resolves Node.js using tool-specific variables, XDG paths, PATH,
 // and finally conventional platform paths, in that order.
 func FindNode(environment []string) (string, error) {
-	if path, configured, err := configuredExecutable(environment, "DSH_NODE_PATH"); configured {
+	return findExecutable(environment, "node", "DSH_NODE_PATH", nodeToolPaths, defaultNodePaths)
+}
+
+func findExecutable(
+	environment []string,
+	name string,
+	configuredVariable string,
+	preferredPaths func([]string) []string,
+	fallbackPaths func([]string) []string,
+) (string, error) {
+	if path, configured, err := configuredExecutable(environment, configuredVariable); configured {
 		return path, err
 	}
-	if path := executableInDirectories("node", nodeToolPaths(environment)); path != "" {
-		return path, nil
-	}
-	if path := executableInDirectories("node", xdgExecutablePaths(environment)); path != "" {
-		return path, nil
-	}
-	if path := executableInPath(environment, "node"); path != "" {
-		return path, nil
-	}
-	if path := executableInDirectories("node", defaultNodePaths(environment)); path != "" {
-		return path, nil
+	for _, directories := range [][]string{
+		preferredPaths(environment),
+		xdgExecutablePaths(environment),
+		filepath.SplitList(EnvironmentValue(environment, "PATH")),
+		fallbackPaths(environment),
+	} {
+		if path := executableInDirectories(name, directories); path != "" {
+			return path, nil
+		}
 	}
 	return "", exec.ErrNotFound
 }
@@ -241,10 +219,6 @@ func configuredExecutable(environment []string, variable string) (string, bool, 
 		return "", true, fmt.Errorf("%s does not point to an executable file: %s", variable, path)
 	}
 	return path, true, nil
-}
-
-func executableInPath(environment []string, name string) string {
-	return executableInDirectories(name, filepath.SplitList(EnvironmentValue(environment, "PATH")))
 }
 
 func executableInDirectories(name string, directories []string) string {

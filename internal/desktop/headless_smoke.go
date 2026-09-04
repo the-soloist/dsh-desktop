@@ -33,15 +33,7 @@ func runHeadlessSmokeTest() (result error) {
 	defer logFile.Close()
 	logger.Printf("[smoke] %s %s", metadata.DisplayName, version)
 
-	supervisor := backend.NewSupervisor(backend.Config{
-		URL:                metadata.DSHURL,
-		PageMarker:         metadata.DSHPageMarker,
-		ReadinessInterval:  readinessInterval,
-		ReadinessStability: readinessStability,
-		RequestTimeout:     requestTimeout,
-		StopTimeout:        processStopTimeout,
-		Logger:             logger,
-	})
+	supervisor := newBackendSupervisor(metadata, logger)
 	defer func() {
 		if closeErr := supervisor.Close(); closeErr != nil {
 			result = errors.Join(result, closeErr)
