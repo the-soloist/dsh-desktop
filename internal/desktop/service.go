@@ -301,6 +301,7 @@ func (controller *controller) showDSH(message, navigationURL string) {
 	controller.logger.Printf("[startup] DSH 已就绪 — %s", message)
 	controller.navigationMu.Lock()
 	controller.navigationURL = navigationURL
+	controller.navigationGeneration++
 	controller.navigationMu.Unlock()
 	controller.pendingNavigation.Store(true)
 	controller.window.window.EmitEvent(startupUpdateEvent, controller.startup.append("DSH 已就绪", message, false, true))
@@ -313,9 +314,13 @@ func (controller *controller) navigateToDSH() {
 	}
 	controller.navigationMu.Lock()
 	navigationURL := controller.navigationURL
+	navigationGeneration := controller.navigationGeneration
 	controller.navigationURL = controller.metadata.DSHURL
 	controller.navigationMu.Unlock()
 	if !hasDSHAuthenticationToken(navigationURL) {
+		if !controller.navigationIsCurrent(navigationGeneration) {
+			return
+		}
 		controller.logger.Printf("[dsh] opening DSH URL: %s", navigationURL)
 		controller.window.window.SetURL(navigationURL)
 		controller.window.show()
@@ -326,15 +331,31 @@ func (controller *controller) navigateToDSH() {
 	// WKWebView starts on the wails:// origin. DSH uses a SameSite=Strict
 	// session cookie, so prime the DSH origin before opening the launch token;
 	// otherwise the 303 token exchange can redirect to / without its new cookie.
+	// Keep the temporary 401 response hidden from the user while doing this.
+	controller.window.window.Hide()
 	controller.logger.Printf("[dsh] priming WebView origin: %s", controller.metadata.DSHURL)
 	controller.window.window.SetURL(controller.metadata.DSHURL)
 	time.AfterFunc(500*time.Millisecond, func() {
-		if controller.quitting.Load() {
+		if !controller.navigationIsCurrent(navigationGeneration) {
 			return
 		}
 		controller.logger.Printf("[dsh] opening authenticated URL: %s", redactSensitiveOutput(navigationURL))
 		controller.window.window.SetURL(navigationURL)
-		controller.window.show()
-		controller.scheduleSmokeSuccess()
+		time.AfterFunc(500*time.Millisecond, func() {
+			if !controller.navigationIsCurrent(navigationGeneration) {
+				return
+			}
+			controller.window.show()
+			controller.scheduleSmokeSuccess()
+		})
 	})
+}
+
+func (controller *controller) navigationIsCurrent(generation uint64) bool {
+	if controller.quitting.Load() {
+		return false
+	}
+	controller.navigationMu.Lock()
+	defer controller.navigationMu.Unlock()
+	return controller.navigationGeneration == generation
 }

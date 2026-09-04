@@ -14,24 +14,25 @@ import (
 )
 
 type controller struct {
-	app                 *application.App
-	window              *windowManager
-	backend             *backend.Supervisor
-	metadata            dshdesktop.Metadata
-	logger              *log.Logger
-	startup             *startupTimeline
-	service             serviceLifecycle
-	startupConsoleOwned bool
-	quitting            atomic.Bool
-	appStarted          atomic.Bool
-	pendingNavigation   atomic.Bool
-	smokeScheduled      atomic.Bool
-	intentMu            sync.Mutex
-	pendingIntent       startupIntent
-	navigationMu        sync.Mutex
-	navigationURL       string
-	smokeMu             sync.Mutex
-	smokeErr            error
+	app                  *application.App
+	window               *windowManager
+	backend              *backend.Supervisor
+	metadata             dshdesktop.Metadata
+	logger               *log.Logger
+	startup              *startupTimeline
+	service              serviceLifecycle
+	startupConsoleOwned  bool
+	quitting             atomic.Bool
+	appStarted           atomic.Bool
+	pendingNavigation    atomic.Bool
+	smokeScheduled       atomic.Bool
+	intentMu             sync.Mutex
+	pendingIntent        startupIntent
+	navigationMu         sync.Mutex
+	navigationURL        string
+	navigationGeneration uint64
+	smokeMu              sync.Mutex
+	smokeErr             error
 }
 
 func newController(
@@ -140,6 +141,10 @@ func (controller *controller) requestRestart() {
 
 func (controller *controller) requestStartupPage(intent startupIntent) {
 	controller.pendingNavigation.Store(false)
+	controller.navigationMu.Lock()
+	controller.navigationGeneration++
+	controller.navigationURL = controller.metadata.DSHURL
+	controller.navigationMu.Unlock()
 	controller.intentMu.Lock()
 	controller.pendingIntent = intent
 	controller.intentMu.Unlock()
