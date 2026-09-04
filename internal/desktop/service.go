@@ -215,7 +215,7 @@ func (controller *controller) launchDSH(runner dshenv.PackageRunner, packageRefe
 	}
 	var authenticationCookie *http.Cookie
 	if probeStatus == backend.ProbeAuthenticationRequired {
-		controller.setStartupStatus("正在获取认证 Cookie", "正在通过本地网络请求交换 dsh web 输出的 /?token=xxx…", false)
+		controller.setStartupStatus("正在获取认证 Cookie", "正在通过本地网络请求交换 dsh web 输出的 /?token=xxx…，成功后将注入 WebView Cookie。", false)
 		cookieContext, cancelCookieExchange := context.WithTimeout(context.Background(), 15*time.Second)
 		authenticationCookie, waitErr = exchangeDSHAuthenticationCookie(cookieContext, navigationURL, controller.metadata.DSHURL)
 		cancelCookieExchange()
@@ -227,7 +227,6 @@ func (controller *controller) launchDSH(runner dshenv.PackageRunner, packageRefe
 			return
 		}
 		controller.logger.Printf("[dsh] authentication cookie acquired via network")
-		controller.setStartupStatus("已获取认证 Cookie", "网络请求已收到 DSH 会话 Cookie，准备注入 WebView…", false)
 	}
 	controller.monitorBackend(process)
 	controller.showDSH("服务已就绪，正在建立 WebView 会话…", authenticationCookie)
