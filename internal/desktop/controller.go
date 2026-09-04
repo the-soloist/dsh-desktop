@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"log"
+	"net/http"
 	"sync"
 	"sync/atomic"
 
@@ -29,8 +30,10 @@ type controller struct {
 	intentMu             sync.Mutex
 	pendingIntent        startupIntent
 	navigationMu         sync.Mutex
-	navigationURL        string
+	navigationCookie     *http.Cookie
 	navigationGeneration uint64
+	proxyMu              sync.Mutex
+	authenticationProxy  *dshAuthenticationProxy
 	smokeMu              sync.Mutex
 	smokeErr             error
 }
@@ -52,7 +55,6 @@ func newController(
 		startup:             newStartupTimeline("正在准备", "即将启动本地 DSH 服务…"),
 		startupConsoleOwned: startupConsoleOwned,
 		pendingIntent:       startupIntentInitial,
-		navigationURL:       metadata.DSHURL,
 	}
 }
 
@@ -140,10 +142,11 @@ func (controller *controller) requestRestart() {
 }
 
 func (controller *controller) requestStartupPage(intent startupIntent) {
+	controller.closeAuthenticationProxy()
 	controller.pendingNavigation.Store(false)
 	controller.navigationMu.Lock()
 	controller.navigationGeneration++
-	controller.navigationURL = controller.metadata.DSHURL
+	controller.navigationCookie = nil
 	controller.navigationMu.Unlock()
 	controller.intentMu.Lock()
 	controller.pendingIntent = intent
@@ -174,6 +177,7 @@ func (controller *controller) quit() {
 
 func (controller *controller) shutdown() {
 	controller.quitting.Store(true)
+	controller.closeAuthenticationProxy()
 	controller.service.set(serviceQuitting)
 	if err := controller.window.store.Save(); err != nil {
 		controller.logger.Printf("[app] cannot save window state during shutdown: %v", err)
@@ -181,5 +185,27 @@ func (controller *controller) shutdown() {
 	if err := controller.backend.Close(); err != nil {
 		controller.logger.Printf("[dsh] cannot stop process during shutdown: %v", err)
 		controller.recordSmokeFailure(err)
+	}
+}
+
+func (controller *controller) replaceAuthenticationProxy(proxy *dshAuthenticationProxy) {
+	controller.proxyMu.Lock()
+	previous := controller.authenticationProxy
+	controller.authenticationProxy = proxy
+	controller.proxyMu.Unlock()
+	if previous != nil {
+		_ = previous.Close()
+	}
+}
+
+func (controller *controller) closeAuthenticationProxy() {
+	controller.proxyMu.Lock()
+	proxy := controller.authenticationProxy
+	controller.authenticationProxy = nil
+	controller.proxyMu.Unlock()
+	if proxy != nil {
+		if err := proxy.Close(); err != nil {
+			controller.logger.Printf("[dsh] cannot close authentication proxy: %v", err)
+		}
 	}
 }

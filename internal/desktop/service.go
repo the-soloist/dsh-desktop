@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -133,7 +134,7 @@ func (controller *controller) prepareInitialStart() bool {
 		stableWait := readinessStability + 2*readinessInterval
 		if err := controller.backend.WaitForReady(context.Background(), nil, stableWait); err == nil {
 			controller.logger.Printf("[dsh] reusing service at %s", controller.metadata.DSHURL)
-			controller.showDSH("正在加载现有 DSH 服务…", controller.metadata.DSHURL)
+			controller.showDSH("正在加载现有 DSH 服务…", nil)
 			return false
 		}
 		controller.logger.Printf("[dsh] existing service disappeared during readiness check")
@@ -203,7 +204,8 @@ func (controller *controller) launchDSH(runner dshenv.PackageRunner, packageRefe
 	case navigationURL = <-webURLs:
 	default:
 	}
-	if controller.backend.Probe(context.Background()) == backend.ProbeAuthenticationRequired && !hasDSHAuthenticationToken(navigationURL) {
+	probeStatus := controller.backend.Probe(context.Background())
+	if probeStatus == backend.ProbeAuthenticationRequired && !hasDSHAuthenticationToken(navigationURL) {
 		waitErr = errors.New("DSH 已要求认证，但启动输出中没有可用的认证地址")
 		if stopErr := controller.backend.StopIfCurrent(process); stopErr != nil {
 			waitErr = errors.Join(waitErr, stopErr)
@@ -211,8 +213,24 @@ func (controller *controller) launchDSH(runner dshenv.PackageRunner, packageRefe
 		controller.showStartupFailure("无法建立 DSH 认证会话。", waitErr)
 		return
 	}
+	var authenticationCookie *http.Cookie
+	if probeStatus == backend.ProbeAuthenticationRequired {
+		controller.setStartupStatus("正在获取认证 Cookie", "正在通过本地网络请求交换 dsh web 输出的 /?token=xxx…", false)
+		cookieContext, cancelCookieExchange := context.WithTimeout(context.Background(), 15*time.Second)
+		authenticationCookie, waitErr = exchangeDSHAuthenticationCookie(cookieContext, navigationURL, controller.metadata.DSHURL)
+		cancelCookieExchange()
+		if waitErr != nil {
+			if stopErr := controller.backend.StopIfCurrent(process); stopErr != nil {
+				waitErr = errors.Join(waitErr, stopErr)
+			}
+			controller.showStartupFailure("无法获取 DSH 认证 Cookie。", waitErr)
+			return
+		}
+		controller.logger.Printf("[dsh] authentication cookie acquired via network")
+		controller.setStartupStatus("已获取认证 Cookie", "网络请求已收到 DSH 会话 Cookie，准备注入 WebView…", false)
+	}
 	controller.monitorBackend(process)
-	controller.showDSH("认证完成，正在加载界面…", navigationURL)
+	controller.showDSH("服务已就绪，正在建立 WebView 会话…", authenticationCookie)
 }
 
 func dshLaunchCommand(runnerName, packageReference string) string {
@@ -244,6 +262,7 @@ func (controller *controller) consumeOutputSummary(process *backend.Process, lin
 func (controller *controller) monitorBackend(process *backend.Process) {
 	go func() {
 		<-process.Done()
+		controller.closeAuthenticationProxy()
 		if !controller.backend.ClearIfCurrent(process) || controller.quitting.Load() {
 			return
 		}
@@ -295,16 +314,23 @@ func (controller *controller) showStartupFailure(summary string, failure error) 
 	controller.scheduleSmokeFailureExit()
 }
 
-func (controller *controller) showDSH(message, navigationURL string) {
+func (controller *controller) showDSH(message string, authenticationCookie *http.Cookie) {
 	controller.service.set(serviceReady)
 	controller.logger.Printf("[dsh] ready: %s", controller.metadata.DSHURL)
+	authenticationRequired := authenticationCookie != nil
+	if authenticationRequired {
+		message = "服务已就绪，正在建立 WebView 会话…"
+	}
 	controller.logger.Printf("[startup] DSH 已就绪 — %s", message)
 	controller.navigationMu.Lock()
-	controller.navigationURL = navigationURL
+	controller.navigationCookie = authenticationCookie
 	controller.navigationGeneration++
 	controller.navigationMu.Unlock()
 	controller.pendingNavigation.Store(true)
-	controller.window.window.EmitEvent(startupUpdateEvent, controller.startup.append("DSH 已就绪", message, false, true))
+	controller.window.window.EmitEvent(startupUpdateEvent, controller.startup.append("DSH 已就绪", message, false, !authenticationRequired))
+	if authenticationRequired {
+		controller.setStartupStatus("正在建立 WebView 会话", "准备使用网络请求获得的 Cookie 建立认证连接…", false)
+	}
 	time.AfterFunc(5*time.Second, controller.navigateToDSH)
 }
 
@@ -313,42 +339,38 @@ func (controller *controller) navigateToDSH() {
 		return
 	}
 	controller.navigationMu.Lock()
-	navigationURL := controller.navigationURL
 	navigationGeneration := controller.navigationGeneration
-	controller.navigationURL = controller.metadata.DSHURL
+	authenticationCookie := controller.navigationCookie
+	controller.navigationCookie = nil
 	controller.navigationMu.Unlock()
-	if !hasDSHAuthenticationToken(navigationURL) {
+	if authenticationCookie == nil {
 		if !controller.navigationIsCurrent(navigationGeneration) {
 			return
 		}
-		controller.logger.Printf("[dsh] opening DSH URL: %s", navigationURL)
-		controller.window.window.SetURL(navigationURL)
+		controller.closeAuthenticationProxy()
+		controller.logger.Printf("[dsh] opening DSH URL: %s", controller.metadata.DSHURL)
+		controller.window.window.SetURL(controller.metadata.DSHURL)
 		controller.window.show()
 		controller.scheduleSmokeSuccess()
 		return
 	}
 
-	// WKWebView starts on the wails:// origin. DSH uses a SameSite=Strict
-	// session cookie, so prime the DSH origin before opening the launch token;
-	// otherwise the 303 token exchange can redirect to / without its new cookie.
-	// Keep the temporary 401 response hidden from the user while doing this.
-	controller.window.window.Hide()
-	controller.logger.Printf("[dsh] priming WebView origin: %s", controller.metadata.DSHURL)
-	controller.window.window.SetURL(controller.metadata.DSHURL)
-	time.AfterFunc(500*time.Millisecond, func() {
-		if !controller.navigationIsCurrent(navigationGeneration) {
-			return
-		}
-		controller.logger.Printf("[dsh] opening authenticated URL: %s", redactSensitiveOutput(navigationURL))
-		controller.window.window.SetURL(navigationURL)
-		time.AfterFunc(500*time.Millisecond, func() {
-			if !controller.navigationIsCurrent(navigationGeneration) {
-				return
-			}
-			controller.window.show()
-			controller.scheduleSmokeSuccess()
-		})
-	})
+	controller.setStartupStatus("正在注入 WebView Cookie", "正在把网络请求获得的认证 Cookie 注入 WebView 请求…", false)
+	proxy, err := newDSHAuthenticationProxy(controller.metadata.DSHURL, authenticationCookie)
+	if err != nil {
+		controller.showStartupFailure("无法建立 DSH WebView 会话。", err)
+		return
+	}
+	if !controller.navigationIsCurrent(navigationGeneration) {
+		_ = proxy.Close()
+		return
+	}
+	controller.replaceAuthenticationProxy(proxy)
+	controller.setStartupStatus("Cookie 已生效", "已通过本地网络请求验证 Cookie，并注入后续 WebView 请求，正在加载 DSH 页面…", false)
+	controller.logger.Printf("[dsh] opening authenticated WebView proxy: %s", proxy.URL())
+	controller.window.window.SetURL(proxy.URL())
+	controller.window.show()
+	controller.scheduleSmokeSuccess()
 }
 
 func (controller *controller) navigationIsCurrent(generation uint64) bool {
