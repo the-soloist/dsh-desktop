@@ -170,6 +170,19 @@ h1 {
   white-space: pre-wrap;
 }
 
+.content p.command {
+  margin-top: 9px;
+  padding: 9px 11px;
+  overflow-wrap: anywhere;
+  border: 1px solid rgba(116, 190, 255, 0.14);
+  border-radius: 8px;
+  color: rgba(226, 240, 255, 0.84);
+  background: rgba(2, 10, 31, 0.44);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
 .current .content p,
 .failed .content p {
   color: rgba(221, 232, 255, 0.68);

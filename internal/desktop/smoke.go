@@ -34,7 +34,7 @@ func (controller *controller) scheduleSmokeSuccess() {
 	if duration <= 2*time.Second {
 		closeDelay = duration / 2
 	}
-	controller.logger.Printf("smoke test will close the window after %s and exit after %s", closeDelay, duration)
+	controller.logger.Printf("[smoke] closing window after %s; exiting after %s", closeDelay, duration)
 	time.AfterFunc(closeDelay, controller.window.window.Close)
 	time.AfterFunc(duration, controller.quit)
 }

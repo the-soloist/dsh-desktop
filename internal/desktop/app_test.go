@@ -3,6 +3,7 @@ package desktop
 import (
 	"bytes"
 	"io"
+	"log"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -33,6 +34,14 @@ func TestStartupTimelineResetClearsPreviousStatuses(t *testing.T) {
 	snapshot := timeline.snapshot()
 	if len(snapshot.Steps) != 1 || snapshot.Steps[0].Status != "新状态" {
 		t.Fatalf("snapshot after reset = %#v", snapshot)
+	}
+}
+
+func TestStartupTimelineMarksCommandsForDedicatedRendering(t *testing.T) {
+	timeline := newStartupTimeline("准备", "")
+	update := timeline.appendCommand("正在启动 DSH", "bunx example@1.0.0 web --no-open")
+	if len(update.Steps) != 1 || !update.Steps[0].Code {
+		t.Fatalf("appendCommand() update = %#v", update)
 	}
 }
 
@@ -69,13 +78,14 @@ func TestStartupAssets(t *testing.T) {
 func TestStartupOutputRecorder(t *testing.T) {
 	var destination bytes.Buffer
 	var lines []string
-	recorder := newStartupOutputRecorder(&destination, func(line string) { lines = append(lines, line) })
+	recorder := newStartupOutputRecorder(log.New(&destination, "", 0), func(line string) { lines = append(lines, line) })
 	_, _ = io.WriteString(recorder, "Resolving dep")
 	_, _ = io.WriteString(recorder, "endencies\nResolved 2\nerror without newline")
-	if got := destination.String(); got != "Resolving dependencies\nResolved 2\nerror without newline" {
+	recorder.Flush()
+	if got := destination.String(); got != "[dsh] Resolving dependencies\n[dsh] Resolved 2\n[dsh] error without newline\n" {
 		t.Fatalf("destination = %q", got)
 	}
-	if len(lines) != 2 || lines[0] != "Resolving dependencies" || lines[1] != "Resolved 2" {
+	if len(lines) != 3 || lines[0] != "Resolving dependencies" || lines[1] != "Resolved 2" || lines[2] != "error without newline" {
 		t.Fatalf("observed lines = %#v", lines)
 	}
 	if !strings.Contains(recorder.recentOutput(), "error without newline") {
@@ -83,13 +93,43 @@ func TestStartupOutputRecorder(t *testing.T) {
 	}
 }
 
+func TestStartupOutputRedactsTokenAndSummarisesPeerWarnings(t *testing.T) {
+	var destination bytes.Buffer
+	recorder := newStartupOutputRecorder(log.New(&destination, "", 0), nil)
+	_, _ = io.WriteString(recorder, "warn: incorrect peer dependency one\n")
+	_, _ = io.WriteString(recorder, "warn: incorrect peer dependency two\n")
+	_, _ = io.WriteString(recorder, "dsh web: http://127.0.0.1:3080/?token=secret-value\n")
+	recorder.Flush()
+	output := destination.String()
+	if strings.Contains(output, "secret-value") || !strings.Contains(output, "token=<redacted>") {
+		t.Fatalf("sanitized output = %q", output)
+	}
+	if !strings.Contains(output, "已省略 2 条 peer dependency 警告") {
+		t.Fatalf("warning summary missing from %q", output)
+	}
+	if strings.Contains(recorder.recentOutput(), "secret-value") {
+		t.Fatalf("recent output leaked token: %q", recorder.recentOutput())
+	}
+}
+
+func TestDSHWebURLAcceptsOnlyConfiguredOrigin(t *testing.T) {
+	const expected = "http://127.0.0.1:3080"
+	got, ok := dshWebURL("dsh web: http://127.0.0.1:3080/?token=secret", expected)
+	if !ok || got != "http://127.0.0.1:3080/?token=secret" || !hasDSHAuthenticationToken(got) {
+		t.Fatalf("dshWebURL() = %q, %v", got, ok)
+	}
+	if _, ok = dshWebURL("dsh web: https://example.com/?token=secret", expected); ok {
+		t.Fatal("dshWebURL() accepted an unexpected origin")
+	}
+}
+
 func TestDSHOutputSummary(t *testing.T) {
 	for _, line := range []string{"Resolving dependencies", "Resolved, downloaded and extracted [2]", "dsh web: http://127.0.0.1:3080"} {
-		if _, _, _, ok := dshOutputSummary(line, "http://127.0.0.1:3080"); !ok {
+		if _, _, _, ok := dshOutputSummary(line); !ok {
 			t.Fatalf("dshOutputSummary(%q) was not recognised", line)
 		}
 	}
-	if _, _, _, ok := dshOutputSummary("ordinary log message", "http://127.0.0.1:3080"); ok {
+	if _, _, _, ok := dshOutputSummary("ordinary log message"); ok {
 		t.Fatal("ordinary output was exposed as a startup summary")
 	}
 }
@@ -117,5 +157,13 @@ func TestHeadlessSmokeTestEnabledUsesEnvironment(t *testing.T) {
 	t.Setenv("DSH_HEADLESS_SMOKE_TEST", "1")
 	if !headlessSmokeTestEnabled() {
 		t.Fatal("headlessSmokeTestEnabled() = false, want true")
+	}
+}
+
+func TestDSHLaunchCommandIncludesExactVersion(t *testing.T) {
+	got := dshLaunchCommand("bunx", "@deepseek-ai/dsh@0.1.2-rc.1")
+	want := "bunx @deepseek-ai/dsh@0.1.2-rc.1 web --no-open"
+	if got != want {
+		t.Fatalf("dshLaunchCommand() = %q, want %q", got, want)
 	}
 }

@@ -82,7 +82,7 @@ func (manager *windowManager) ensureVisible() {
 	if !state.HasPosition || windowIntersectsScreens(state, manager.app.Screen.GetAll()) {
 		return
 	}
-	manager.logger.Printf("saved window position is outside connected displays; centering the window")
+	manager.logger.Printf("[window] saved position is outside connected displays; centering")
 	manager.window.Center()
 	manager.captureNormalGeometry()
 }
@@ -111,14 +111,14 @@ func (manager *windowManager) save() {
 		manager.captureNormalGeometry()
 	}
 	if err := manager.store.Save(); err != nil {
-		manager.logger.Printf("cannot save window state: %v", err)
+		manager.logger.Printf("[window] cannot save state: %v", err)
 	}
 }
 
 func (manager *windowManager) close() {
 	manager.save()
 	manager.window.Hide()
-	manager.logger.Printf("desktop window closed; application remains in the system tray")
+	manager.logger.Printf("[window] closed; application remains in the system tray")
 }
 
 func (manager *windowManager) show() {
@@ -131,7 +131,7 @@ func (manager *windowManager) show() {
 func (manager *windowManager) forceReload() {
 	manager.show()
 	manager.window.ForceReload()
-	manager.logger.Printf("desktop page force-refreshed")
+	manager.logger.Printf("[window] page force-refreshed")
 }
 
 func pageReloadKeyBindings() map[string]func(application.Window) {

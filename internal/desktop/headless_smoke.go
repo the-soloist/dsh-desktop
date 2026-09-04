@@ -10,6 +10,7 @@ import (
 	"github.com/the-soloist/dsh-desktop/internal/applog"
 	"github.com/the-soloist/dsh-desktop/internal/backend"
 	"github.com/the-soloist/dsh-desktop/internal/dshenv"
+	"github.com/the-soloist/dsh-desktop/internal/npmregistry"
 )
 
 func runHeadlessSmokeTest() (result error) {
@@ -30,10 +31,9 @@ func runHeadlessSmokeTest() (result error) {
 		return fmt.Errorf("cannot initialise the launcher log: %w", err)
 	}
 	defer logFile.Close()
-	logger.Printf("starting headless smoke test for %s %s", metadata.DisplayName, version)
+	logger.Printf("[smoke] %s %s", metadata.DisplayName, version)
 
 	supervisor := backend.NewSupervisor(backend.Config{
-		Package:            metadata.DSHPackage,
 		URL:                metadata.DSHURL,
 		PageMarker:         metadata.DSHPageMarker,
 		ReadinessInterval:  readinessInterval,
@@ -50,8 +50,10 @@ func runHeadlessSmokeTest() (result error) {
 
 	switch supervisor.Probe(context.Background()) {
 	case backend.ProbeReady:
-		logger.Printf("headless smoke test reused DSH at %s", metadata.DSHURL)
+		logger.Printf("[smoke] reused DSH at %s", metadata.DSHURL)
 		return nil
+	case backend.ProbeAuthenticationRequired:
+		return fmt.Errorf("%s is served by an authenticated external DSH process", metadata.DSHURL)
 	case backend.ProbeUnexpected:
 		return fmt.Errorf("%s is occupied by a non-DSH service", metadata.DSHURL)
 	}
@@ -60,14 +62,26 @@ func runHeadlessSmokeTest() (result error) {
 	if err != nil {
 		return fmt.Errorf("cannot resolve the DSH runtime environment: %w", err)
 	}
-	logger.Printf("headless smoke test using bunx: %s", runtimeEnvironment.BunxPath)
-	logger.Printf("headless smoke test using Node.js: %s", runtimeEnvironment.NodePath)
+	logger.Printf("[smoke] runner=%s (%s), node=%s", runtimeEnvironment.Runner.Name, runtimeEnvironment.Runner.Path, runtimeEnvironment.NodePath)
+	registryClient, err := npmregistry.NewClient(runtimeEnvironment.RegistryURL, nil)
+	if err != nil {
+		return fmt.Errorf("cannot configure the npm registry: %w", err)
+	}
+	latestVersion, err := registryClient.LatestVersion(context.Background(), metadata.DSHPackage)
+	if err != nil {
+		return fmt.Errorf("cannot resolve the latest DSH version: %w", err)
+	}
+	packageReference := npmregistry.ExactReference(metadata.DSHPackage, latestVersion)
+	logger.Printf("[smoke] package=%s", packageReference)
+	output := newStartupOutputRecorder(logger, nil)
+	defer output.Flush()
 	process, err := supervisor.Start(
 		context.Background(),
-		runtimeEnvironment.BunxPath,
+		runtimeEnvironment.Runner.Path,
+		packageReference,
 		runtimeEnvironment.Workspace,
 		runtimeEnvironment.Environment,
-		logger.Writer(),
+		output,
 	)
 	if err != nil {
 		return fmt.Errorf("cannot start DSH: %w", err)
@@ -75,6 +89,7 @@ func runHeadlessSmokeTest() (result error) {
 	if err = supervisor.WaitForReady(context.Background(), process, startTimeout()); err != nil {
 		return fmt.Errorf("DSH did not become ready: %w", err)
 	}
-	logger.Printf("headless smoke test reached %s", metadata.DSHURL)
+	output.Flush()
+	logger.Printf("[smoke] DSH ready at %s", metadata.DSHURL)
 	return nil
 }

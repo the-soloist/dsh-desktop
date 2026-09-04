@@ -9,8 +9,8 @@ import (
 	"syscall"
 )
 
-func newBunxCommand(ctx context.Context, bunxPath string, arguments ...string) *exec.Cmd {
-	return exec.CommandContext(ctx, bunxPath, arguments...)
+func newPackageRunnerCommand(ctx context.Context, runnerPath string, arguments ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, runnerPath, arguments...)
 }
 
 func configureChildProcess(command *exec.Cmd) {

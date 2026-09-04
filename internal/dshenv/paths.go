@@ -1,6 +1,7 @@
 package dshenv
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,6 +9,36 @@ import (
 	"runtime"
 	"strings"
 )
+
+const (
+	RunnerBunx = "bunx"
+	RunnerNPX  = "npx"
+)
+
+// FindPackageRunner prefers bunx and falls back to npx only when bunx is not
+// installed. Invalid explicit configuration remains an error.
+func FindPackageRunner(environment []string) (PackageRunner, error) {
+	return findPackageRunner(environment, FindBunx, FindNPX)
+}
+
+func findPackageRunner(
+	environment []string,
+	findBunx func([]string) (string, error),
+	findNPX func([]string) (string, error),
+) (PackageRunner, error) {
+	path, err := findBunx(environment)
+	if err == nil {
+		return PackageRunner{Name: RunnerBunx, Path: path}, nil
+	}
+	if !errors.Is(err, exec.ErrNotFound) {
+		return PackageRunner{}, err
+	}
+	path, err = findNPX(environment)
+	if err == nil {
+		return PackageRunner{Name: RunnerNPX, Path: path}, nil
+	}
+	return PackageRunner{}, err
+}
 
 // FindBunx resolves bunx using tool-specific variables, XDG paths, PATH, and
 // finally conventional platform paths, in that order.
@@ -25,6 +56,27 @@ func FindBunx(environment []string) (string, error) {
 		return path, nil
 	}
 	if path := executableInDirectories("bunx", defaultBunPaths(environment)); path != "" {
+		return path, nil
+	}
+	return "", exec.ErrNotFound
+}
+
+// FindNPX resolves npx using tool-specific variables, Node.js manager paths,
+// XDG paths, PATH, and conventional platform paths, in that order.
+func FindNPX(environment []string) (string, error) {
+	if path, configured, err := configuredExecutable(environment, "DSH_NPX_PATH"); configured {
+		return path, err
+	}
+	if path := executableInDirectories("npx", npmToolPaths(environment)); path != "" {
+		return path, nil
+	}
+	if path := executableInDirectories("npx", xdgExecutablePaths(environment)); path != "" {
+		return path, nil
+	}
+	if path := executableInPath(environment, "npx"); path != "" {
+		return path, nil
+	}
+	if path := executableInDirectories("npx", defaultNodePaths(environment)); path != "" {
 		return path, nil
 	}
 	return "", exec.ErrNotFound
@@ -51,13 +103,25 @@ func FindNode(environment []string) (string, error) {
 	return "", exec.ErrNotFound
 }
 
-func runtimeExecutablePaths(environment []string, bunxPath, nodePath string) []string {
-	paths := []string{filepath.Dir(bunxPath), filepath.Dir(nodePath)}
+func runtimeExecutablePaths(environment []string, runnerPath, nodePath string) []string {
+	paths := []string{filepath.Dir(runnerPath), filepath.Dir(nodePath)}
 	paths = append(paths, bunToolPaths(environment)...)
-	paths = append(paths, nodeToolPaths(environment)...)
+	paths = append(paths, npmToolPaths(environment)...)
 	paths = append(paths, xdgExecutablePaths(environment)...)
 	paths = append(paths, defaultBunPaths(environment)...)
 	paths = append(paths, defaultNodePaths(environment)...)
+	return paths
+}
+
+func npmToolPaths(environment []string) []string {
+	paths := nodeToolPaths(environment)
+	if root := strings.TrimSpace(EnvironmentValue(environment, "NPM_CONFIG_PREFIX")); root != "" {
+		if runtime.GOOS == "windows" {
+			paths = append([]string{root}, paths...)
+		} else {
+			paths = append([]string{filepath.Join(root, "bin")}, paths...)
+		}
+	}
 	return paths
 }
 
@@ -188,16 +252,25 @@ func executableInDirectories(name string, directories []string) string {
 		if strings.TrimSpace(directory) == "" {
 			continue
 		}
-		candidate := filepath.Join(directory, executableName(name))
-		if !isExecutableFile(candidate) {
-			continue
-		}
-		path, err := filepath.Abs(candidate)
-		if err == nil {
-			return path
+		for _, filename := range executableNames(name) {
+			candidate := filepath.Join(directory, filename)
+			if !isExecutableFile(candidate) {
+				continue
+			}
+			path, err := filepath.Abs(candidate)
+			if err == nil {
+				return path
+			}
 		}
 	}
 	return ""
+}
+
+func executableNames(name string) []string {
+	if runtime.GOOS == "windows" && filepath.Ext(name) == "" {
+		return []string{name + ".exe", name + ".cmd", name + ".bat", name + ".com"}
+	}
+	return []string{name}
 }
 
 func executableName(name string) string {

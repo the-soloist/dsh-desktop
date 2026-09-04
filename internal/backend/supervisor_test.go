@@ -35,6 +35,7 @@ func TestProbeIdentifiesDSH(t *testing.T) {
 		want       ProbeStatus
 	}{
 		{name: "DSH page", statusCode: http.StatusOK, body: "<title>DeepSeek Harness</title>", want: ProbeReady},
+		{name: "DSH authentication", statusCode: http.StatusUnauthorized, body: "dsh web authentication required; reopen the URL printed by dsh web.", want: ProbeAuthenticationRequired},
 		{name: "unrelated page", statusCode: http.StatusOK, body: "<title>Other app</title>", want: ProbeUnexpected},
 		{name: "DSH starting error", statusCode: http.StatusInternalServerError, body: "DeepSeek Harness", want: ProbeUnavailable},
 	}
@@ -48,6 +49,16 @@ func TestProbeIdentifiesDSH(t *testing.T) {
 				t.Fatalf("Probe() = %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+func TestWaitForReadyAcceptsAuthenticatedDSH(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return response(http.StatusUnauthorized, "dsh web authentication required"), nil
+	})}
+	supervisor := NewSupervisor(Config{URL: "http://127.0.0.1:3080", Client: client})
+	if err := supervisor.waitForReady(context.Background(), nil, 100*time.Millisecond, time.Millisecond, 4*time.Millisecond); err != nil {
+		t.Fatalf("waitForReady() error = %v", err)
 	}
 }
 
@@ -85,7 +96,23 @@ func TestWaitForReadyRejectsUnexpectedService(t *testing.T) {
 	})}
 	supervisor := NewSupervisor(Config{URL: "http://127.0.0.1:3080", PageMarker: "DeepSeek Harness", Client: client})
 	err := supervisor.waitForReady(context.Background(), nil, time.Second, time.Millisecond, time.Millisecond)
-	if err == nil || !strings.Contains(err.Error(), "not DSH") {
+	if err == nil || !strings.Contains(err.Error(), "非 DSH") {
+		t.Fatalf("waitForReady() error = %v", err)
+	}
+}
+
+func TestWaitForReadyAllowsManagedServiceToFinishInitialising(t *testing.T) {
+	requests := 0
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		requests++
+		if requests < 3 {
+			return response(http.StatusOK, "temporary startup page"), nil
+		}
+		return response(http.StatusUnauthorized, "dsh web authentication required"), nil
+	})}
+	process := &Process{done: make(chan struct{})}
+	supervisor := NewSupervisor(Config{URL: "http://127.0.0.1:3080", Client: client})
+	if err := supervisor.waitForReady(context.Background(), process, 100*time.Millisecond, time.Millisecond, 4*time.Millisecond); err != nil {
 		t.Fatalf("waitForReady() error = %v", err)
 	}
 }
@@ -138,11 +165,11 @@ func TestStopCurrentAcceptsSuccessfulForcedFallback(t *testing.T) {
 }
 
 func TestCloseRejectsFutureStarts(t *testing.T) {
-	supervisor := NewSupervisor(Config{Package: "example", Logger: log.New(io.Discard, "", 0)})
+	supervisor := NewSupervisor(Config{Logger: log.New(io.Discard, "", 0)})
 	if err := supervisor.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	_, err := supervisor.Start(context.Background(), "missing-bunx", t.TempDir(), nil, io.Discard)
+	_, err := supervisor.Start(context.Background(), "missing-runner", "example@1.0.0", t.TempDir(), nil, io.Discard)
 	if !errors.Is(err, ErrClosed) {
 		t.Fatalf("Start() error = %v, want ErrClosed", err)
 	}

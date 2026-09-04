@@ -29,6 +29,7 @@ type startupStatus struct {
 	StartedAt string `json:"startedAt"`
 	Failed    bool   `json:"failed"`
 	Navigate  bool   `json:"navigate"`
+	Code      bool   `json:"code,omitempty"`
 }
 
 type startupUpdate struct {
@@ -64,9 +65,18 @@ func newStartupStatus(status, detail string, failed, navigate bool) startupStatu
 }
 
 func (timeline *startupTimeline) append(status, detail string, failed, navigate bool) startupUpdate {
+	return timeline.appendStep(newStartupStatus(status, detail, failed, navigate))
+}
+
+func (timeline *startupTimeline) appendCommand(status, command string) startupUpdate {
+	step := newStartupStatus(status, command, false, false)
+	step.Code = true
+	return timeline.appendStep(step)
+}
+
+func (timeline *startupTimeline) appendStep(step startupStatus) startupUpdate {
 	timeline.mu.Lock()
 	defer timeline.mu.Unlock()
-	step := newStartupStatus(status, detail, failed, navigate)
 	timeline.steps = append(timeline.steps, step)
 	return startupUpdate{Steps: []startupStatus{step}}
 }

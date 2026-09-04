@@ -28,6 +28,8 @@ type controller struct {
 	smokeScheduled      atomic.Bool
 	intentMu            sync.Mutex
 	pendingIntent       startupIntent
+	navigationMu        sync.Mutex
+	navigationURL       string
 	smokeMu             sync.Mutex
 	smokeErr            error
 }
@@ -49,11 +51,12 @@ func newController(
 		startup:             newStartupTimeline("正在准备", "即将启动本地 DSH 服务…"),
 		startupConsoleOwned: startupConsoleOwned,
 		pendingIntent:       startupIntentInitial,
+		navigationURL:       metadata.DSHURL,
 	}
 }
 
 func (controller *controller) bind() {
-	controller.logger.Printf("startup status: 正在准备 — 即将启动本地 DSH 服务…")
+	controller.logger.Printf("[startup] 正在准备 — 即将启动本地 DSH 服务…")
 	controller.window.window.RegisterHook(events.Common.WindowClosing, func(event *application.WindowEvent) {
 		if controller.quitting.Load() {
 			controller.window.save()
@@ -75,7 +78,7 @@ func (controller *controller) bind() {
 	})
 	controller.app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
 		controller.appStarted.Store(true)
-		controller.logger.Printf("desktop window started")
+		controller.logger.Printf("[app] desktop window started")
 		if controller.quitting.Load() {
 			controller.app.Quit()
 			return
@@ -86,7 +89,7 @@ func (controller *controller) bind() {
 		controller.window.ensureVisible()
 		controller.window.show()
 		if smokeTestEnabled() {
-			controller.logger.Printf("smoke test starting DSH without waiting for the startup frontend")
+			controller.logger.Printf("[smoke] starting DSH without waiting for the startup frontend")
 			controller.startPendingService()
 		}
 	})
@@ -130,7 +133,7 @@ func (controller *controller) requestRestart() {
 	if !controller.service.scheduleRestart() {
 		return
 	}
-	controller.logger.Printf("DSH restart requested from tray")
+	controller.logger.Printf("[dsh] restart requested from tray")
 	controller.startup.reset("正在重启 DSH", "正在停止现有服务…", false)
 	controller.requestStartupPage(startupIntentRestart)
 }
@@ -158,7 +161,7 @@ func (controller *controller) quit() {
 	}
 	controller.service.set(serviceQuitting)
 	controller.window.save()
-	controller.logger.Printf("complete application exit requested")
+	controller.logger.Printf("[app] complete exit requested")
 	if controller.appStarted.Load() {
 		controller.app.Quit()
 	}
@@ -168,10 +171,10 @@ func (controller *controller) shutdown() {
 	controller.quitting.Store(true)
 	controller.service.set(serviceQuitting)
 	if err := controller.window.store.Save(); err != nil {
-		controller.logger.Printf("cannot save window state during shutdown: %v", err)
+		controller.logger.Printf("[app] cannot save window state during shutdown: %v", err)
 	}
 	if err := controller.backend.Close(); err != nil {
-		controller.logger.Printf("cannot stop DSH during shutdown: %v", err)
+		controller.logger.Printf("[dsh] cannot stop process during shutdown: %v", err)
 		controller.recordSmokeFailure(err)
 	}
 }

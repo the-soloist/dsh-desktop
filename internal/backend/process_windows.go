@@ -18,13 +18,13 @@ const (
 	createNoWindow        = 0x08000000
 )
 
-func newBunxCommand(ctx context.Context, bunxPath string, arguments ...string) *exec.Cmd {
-	extension := strings.ToLower(filepath.Ext(bunxPath))
+func newPackageRunnerCommand(ctx context.Context, runnerPath string, arguments ...string) *exec.Cmd {
+	extension := strings.ToLower(filepath.Ext(runnerPath))
 	if extension != ".cmd" && extension != ".bat" {
-		return exec.CommandContext(ctx, bunxPath, arguments...)
+		return exec.CommandContext(ctx, runnerPath, arguments...)
 	}
 	parts := make([]string, 0, len(arguments)+1)
-	parts = append(parts, quoteCommandPromptArgument(bunxPath))
+	parts = append(parts, quoteCommandPromptArgument(runnerPath))
 	for _, argument := range arguments {
 		parts = append(parts, quoteCommandPromptArgument(argument))
 	}

@@ -55,7 +55,7 @@ func New(path string) (*log.Logger, io.Closer, error) {
 	if _, statErr := os.Stdout.Stat(); statErr == nil {
 		writers = append(writers, os.Stdout)
 	}
-	logger := log.New(io.MultiWriter(writers...), "", log.Ldate|log.Ltime|log.Lmicroseconds)
+	logger := log.New(io.MultiWriter(writers...), "", log.Ldate|log.Ltime)
 	return logger, writer, nil
 }
 

@@ -9,14 +9,13 @@ let generation = 0;
 
 function displayTime(value) {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "--:--:--.---";
-  const time = date.toLocaleTimeString([], {
+  if (Number.isNaN(date.getTime())) return "--:--:--";
+  return date.toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
   });
-  return `${time}.${String(date.getMilliseconds()).padStart(3, "0")}`;
 }
 
 function completeCurrentStep() {
@@ -51,6 +50,7 @@ function renderStep(step) {
 
   const detail = document.createElement("p");
   detail.textContent = step.detail;
+  if (step.code) detail.classList.add("command");
 
   heading.append(title, startedAt);
   content.append(heading);

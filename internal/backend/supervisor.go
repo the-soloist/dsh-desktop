@@ -15,7 +15,10 @@ import (
 	"time"
 )
 
-const responseBodyLimit = 64 * 1024
+const (
+	responseBodyLimit       = 64 * 1024
+	dshAuthenticationMarker = "dsh web authentication required"
+)
 
 // ErrClosed is returned when a launch races with application shutdown.
 var ErrClosed = errors.New("DSH supervisor is closed")
@@ -26,12 +29,12 @@ type ProbeStatus uint8
 const (
 	ProbeUnavailable ProbeStatus = iota
 	ProbeReady
+	ProbeAuthenticationRequired
 	ProbeUnexpected
 )
 
 // Config contains the process and readiness settings owned by a Supervisor.
 type Config struct {
-	Package            string
 	URL                string
 	PageMarker         string
 	ReadinessInterval  time.Duration
@@ -97,7 +100,8 @@ func NewSupervisor(config Config) *Supervisor {
 // process already owned by this supervisor.
 func (supervisor *Supervisor) Start(
 	ctx context.Context,
-	bunxPath string,
+	runnerPath string,
+	packageReference string,
 	workspace string,
 	environment []string,
 	output io.Writer,
@@ -111,7 +115,7 @@ func (supervisor *Supervisor) Start(
 		return nil, errors.New("a managed DSH process is already running")
 	}
 
-	command := newBunxCommand(ctx, bunxPath, supervisor.config.Package, "web", "--no-open")
+	command := newPackageRunnerCommand(ctx, runnerPath, packageReference, "web", "--no-open")
 	command.Dir = workspace
 	command.Env = environment
 	command.Stdout = output
@@ -227,19 +231,19 @@ func (process *Process) stop(timeout time.Duration, logger *log.Logger, terminat
 			return
 		}
 		processID := process.cmd.Process.Pid
-		logger.Printf("stopping DSH process tree (pid %d)", processID)
+		logger.Printf("[dsh] stopping process tree (pid=%d)", processID)
 		var failures []error
 		if err := terminate(processID, false); err != nil {
-			logger.Printf("graceful DSH process-tree termination failed: %v", err)
+			logger.Printf("[dsh] graceful process-tree termination failed: %v", err)
 			failures = append(failures, fmt.Errorf("terminate DSH process tree: %w", err))
 		}
 		if waitForExit(process.done, timeout) {
 			return
 		}
 
-		logger.Printf("forcing DSH process tree to stop")
+		logger.Printf("[dsh] forcing process tree to stop")
 		if err := terminate(processID, true); err != nil {
-			logger.Printf("forced DSH process-tree termination failed: %v", err)
+			logger.Printf("[dsh] forced process-tree termination failed: %v", err)
 			failures = append(failures, fmt.Errorf("force DSH process tree to stop: %w", err))
 		}
 		if waitForExit(process.done, timeout) {
@@ -278,7 +282,11 @@ func (supervisor *Supervisor) Probe(ctx context.Context) ProbeStatus {
 	if readErr != nil {
 		return ProbeUnexpected
 	}
-	matchesDSH := strings.Contains(strings.ToLower(string(body)), strings.ToLower(supervisor.config.PageMarker))
+	normalisedBody := strings.ToLower(string(body))
+	if response.StatusCode == http.StatusUnauthorized && strings.Contains(normalisedBody, dshAuthenticationMarker) {
+		return ProbeAuthenticationRequired
+	}
+	matchesDSH := strings.Contains(normalisedBody, strings.ToLower(supervisor.config.PageMarker))
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusBadRequest {
 		if matchesDSH {
 			return ProbeUnavailable
@@ -316,7 +324,7 @@ func (supervisor *Supervisor) waitForReady(
 
 	for {
 		switch supervisor.Probe(ctx) {
-		case ProbeReady:
+		case ProbeReady, ProbeAuthenticationRequired:
 			if readySince.IsZero() {
 				readySince = time.Now()
 			}
@@ -324,7 +332,10 @@ func (supervisor *Supervisor) waitForReady(
 				return nil
 			}
 		case ProbeUnexpected:
-			return fmt.Errorf("%s is occupied by a service that is not DSH", supervisor.config.URL)
+			readySince = time.Time{}
+			if process == nil {
+				return fmt.Errorf("%s 已被非 DSH 服务占用", supervisor.config.URL)
+			}
 		default:
 			readySince = time.Time{}
 		}

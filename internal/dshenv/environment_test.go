@@ -2,6 +2,7 @@ package dshenv
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -97,6 +98,69 @@ func TestFindBunxPrefersToolConfigurationToXDGAndPath(t *testing.T) {
 	}
 }
 
+func TestFindPackageRunnerPrefersBunx(t *testing.T) {
+	directory := t.TempDir()
+	for _, name := range []string{"bunx", "npx"} {
+		if err := os.WriteFile(filepath.Join(directory, executableName(name)), []byte(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner, err := FindPackageRunner([]string{"PATH=" + directory})
+	if err != nil {
+		t.Fatalf("FindPackageRunner() error = %v", err)
+	}
+	if runner.Name != RunnerBunx || runner.Path != filepath.Join(directory, executableName("bunx")) {
+		t.Fatalf("runner = %#v, want bunx", runner)
+	}
+}
+
+func TestFindPackageRunnerFallsBackToNPX(t *testing.T) {
+	npx := filepath.Join(t.TempDir(), executableName("npx"))
+	runner, err := findPackageRunner(
+		nil,
+		func([]string) (string, error) { return "", exec.ErrNotFound },
+		func([]string) (string, error) { return npx, nil },
+	)
+	if err != nil {
+		t.Fatalf("FindPackageRunner() error = %v", err)
+	}
+	if runner.Name != RunnerNPX || runner.Path != npx {
+		t.Fatalf("runner = %#v, want npx at %q", runner, npx)
+	}
+}
+
+func TestFindNPXPrefersToolConfigurationToXDGAndPath(t *testing.T) {
+	home := t.TempDir()
+	npmPrefix := filepath.Join(home, "npm")
+	xdgBin := filepath.Join(home, "xdg-bin")
+	pathBin := filepath.Join(home, "path-bin")
+	npmBin := npmPrefix
+	if executableName("npx") == "npx" {
+		npmBin = filepath.Join(npmPrefix, "bin")
+	}
+	for _, directory := range []string{npmBin, xdgBin, pathBin} {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory, executableName("npx")), []byte("npx"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path, err := FindNPX([]string{
+		"HOME=" + home,
+		"NPM_CONFIG_PREFIX=" + npmPrefix,
+		"XDG_BIN_HOME=" + xdgBin,
+		"PATH=" + pathBin,
+	})
+	if err != nil {
+		t.Fatalf("FindNPX() error = %v", err)
+	}
+	want := filepath.Join(npmBin, executableName("npx"))
+	if path != want {
+		t.Fatalf("FindNPX() = %q, want npm-configured path %q", path, want)
+	}
+}
+
 func TestFindNodePrefersToolConfigurationToXDGAndPath(t *testing.T) {
 	home := t.TempDir()
 	nodeHome := filepath.Join(home, "tool-node")
@@ -186,8 +250,8 @@ func TestResolveProducesOneRuntimeEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if resolved.BunxPath != filepath.Join(bunInstall, "bin", executableName("bunx")) {
-		t.Errorf("bunx = %q", resolved.BunxPath)
+	if resolved.Runner.Name != RunnerBunx || resolved.Runner.Path != filepath.Join(bunInstall, "bin", executableName("bunx")) {
+		t.Errorf("runner = %#v", resolved.Runner)
 	}
 	if resolved.NodePath != filepath.Join(nodeHome, "bin", executableName("node")) {
 		t.Errorf("node = %q", resolved.NodePath)
@@ -201,5 +265,30 @@ func TestResolveProducesOneRuntimeEnvironment(t *testing.T) {
 	path := filepath.SplitList(EnvironmentValue(resolved.Environment, "PATH"))
 	if len(path) < 2 || path[0] != filepath.Join(bunInstall, "bin") || path[1] != filepath.Join(nodeHome, "bin") {
 		t.Errorf("resolved PATH = %#v", path)
+	}
+}
+
+func TestResolveReadsConfiguredNPMRegistry(t *testing.T) {
+	home := t.TempDir()
+	bin := filepath.Join(home, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"bunx", "node"} {
+		if err := os.WriteFile(filepath.Join(bin, executableName(name)), []byte(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resolved, err := Resolve([]string{
+		"HOME=" + home,
+		"PATH=" + bin,
+		"DSH_NPM_REGISTRY=https://registry.example.test/npm",
+		"NPM_CONFIG_REGISTRY=https://ignored.example.test",
+	})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if resolved.RegistryURL != "https://registry.example.test/npm" {
+		t.Fatalf("RegistryURL = %q", resolved.RegistryURL)
 	}
 }

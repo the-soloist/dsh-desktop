@@ -75,7 +75,7 @@ func run() error {
 		return fmt.Errorf("cannot initialise the launcher log: %w", err)
 	}
 	defer logFile.Close()
-	logger.Printf("starting %s %s on %s/%s", metadata.DisplayName, version, runtime.GOOS, runtime.GOARCH)
+	logger.Printf("[app] %s %s (%s/%s)", metadata.DisplayName, version, runtime.GOOS, runtime.GOARCH)
 
 	statePath, err := windowstate.Path(metadata.InternalName)
 	if err != nil {
@@ -105,7 +105,6 @@ func run() error {
 	})
 	window := newWindowManager(app, stateStore, metadata.DisplayName, logger)
 	supervisor := backend.NewSupervisor(backend.Config{
-		Package:            metadata.DSHPackage,
 		URL:                metadata.DSHURL,
 		PageMarker:         metadata.DSHPageMarker,
 		ReadinessInterval:  readinessInterval,
@@ -120,7 +119,7 @@ func run() error {
 	if err = app.Run(); err != nil {
 		return fmt.Errorf("desktop window failed: %w", err)
 	}
-	logger.Printf("application stopped")
+	logger.Printf("[app] application stopped")
 	return controller.smokeFailure()
 }
 

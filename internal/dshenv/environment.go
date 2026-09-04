@@ -12,18 +12,25 @@ import (
 )
 
 var (
-	ErrBunxNotFound = errors.New("bunx was not found")
-	ErrNodeNotFound = errors.New("Node.js was not found")
-	ErrWorkspace    = errors.New("DSH workspace is invalid")
+	ErrPackageRunnerNotFound = errors.New("neither bunx nor npx was found")
+	ErrNodeNotFound          = errors.New("Node.js was not found")
+	ErrWorkspace             = errors.New("DSH workspace is invalid")
 )
+
+// PackageRunner is the executable selected to download and run DSH.
+type PackageRunner struct {
+	Name string
+	Path string
+}
 
 // Runtime contains the complete environment and paths used to launch DSH.
 type Runtime struct {
 	Environment []string
-	BunxPath    string
+	Runner      PackageRunner
 	NodePath    string
 	DSHHome     string
 	Workspace   string
+	RegistryURL string
 	Shell       ShellImport
 	ShellError  error
 }
@@ -34,18 +41,21 @@ func Resolve(base []string) (Runtime, error) {
 	environment, shell, shellErr := LoadShellEnvironment(base)
 	result := Runtime{Environment: environment, Shell: shell, ShellError: shellErr}
 
-	bunxPath, err := FindBunx(environment)
+	runner, err := FindPackageRunner(environment)
 	if err != nil {
-		return result, fmt.Errorf("%w: %v", ErrBunxNotFound, err)
+		return result, fmt.Errorf("%w: %v", ErrPackageRunnerNotFound, err)
 	}
 	nodePath, err := FindNode(environment)
 	if err != nil {
 		return result, fmt.Errorf("%w: %v", ErrNodeNotFound, err)
 	}
 	environment, dshHome := withDSHHome(environment)
+	if runner.Name == RunnerNPX {
+		environment = SetEnvironment(environment, "NPM_CONFIG_YES", "true")
+	}
 	environment = PrependExecutablePaths(
 		environment,
-		runtimeExecutablePaths(environment, bunxPath, nodePath)...,
+		runtimeExecutablePaths(environment, runner.Path, nodePath)...,
 	)
 	workspace, err := Workspace(environment)
 	if err != nil {
@@ -53,11 +63,21 @@ func Resolve(base []string) (Runtime, error) {
 	}
 
 	result.Environment = environment
-	result.BunxPath = bunxPath
+	result.Runner = runner
 	result.NodePath = nodePath
 	result.DSHHome = dshHome
 	result.Workspace = workspace
+	result.RegistryURL = npmRegistryURL(environment)
 	return result, nil
+}
+
+func npmRegistryURL(environment []string) string {
+	for _, name := range []string{"DSH_NPM_REGISTRY", "NPM_CONFIG_REGISTRY"} {
+		if value := strings.TrimSpace(EnvironmentValue(environment, name)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // Workspace resolves DSH_WORKSPACE or falls back to the prepared HOME.
