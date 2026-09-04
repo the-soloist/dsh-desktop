@@ -88,6 +88,7 @@ func run() error {
 		MinimumHeight: minimumHeight,
 	}, logger)
 
+	var desktopController *controller
 	app := application.New(application.Options{
 		Name:        metadata.InternalName,
 		Description: fmt.Sprintf("%s\nVersion %s", metadata.Description, version),
@@ -102,10 +103,16 @@ func run() error {
 			DisableQuitOnLastWindowClosed: true,
 			ProgramName:                   metadata.DisplayName,
 		},
+		RawMessageHandler: func(window application.Window, message string, originInfo *application.OriginInfo) {
+			if desktopController != nil {
+				desktopController.handleRawMessage(window, message, originInfo)
+			}
+		},
 	})
 	window := newWindowManager(app, stateStore, metadata.DisplayName, logger)
 	supervisor := newBackendSupervisor(metadata, logger)
 	controller := newController(app, window, supervisor, metadata, logger, startupConsoleOwned)
+	desktopController = controller
 	controller.bind()
 
 	if err = app.Run(); err != nil {

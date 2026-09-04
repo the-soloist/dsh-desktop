@@ -42,7 +42,17 @@ func newWindowManager(app *application.App, store *windowstate.Store, title stri
 	}
 	manager := &windowManager{app: app, window: app.Window.NewWithOptions(options), store: store, logger: logger}
 	manager.bindGeometryEvents()
+	manager.bindDownloadInterception()
 	return manager
+}
+
+func (manager *windowManager) bindDownloadInterception() {
+	install := func(*application.WindowEvent) {
+		manager.window.ExecJS(downloadInterceptorScript)
+	}
+	manager.window.OnWindowEvent(events.Mac.WebViewDidFinishNavigation, install)
+	manager.window.OnWindowEvent(events.Windows.WebViewNavigationCompleted, install)
+	manager.window.OnWindowEvent(events.Linux.WindowLoadFinished, install)
 }
 
 func (manager *windowManager) bindGeometryEvents() {

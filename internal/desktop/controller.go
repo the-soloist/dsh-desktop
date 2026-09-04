@@ -34,6 +34,7 @@ type controller struct {
 	navigationGeneration uint64
 	proxyMu              sync.Mutex
 	authenticationProxy  *dshAuthenticationProxy
+	downloadMu           sync.Mutex
 	smokeMu              sync.Mutex
 	smokeErr             error
 }
