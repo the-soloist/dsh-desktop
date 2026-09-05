@@ -3,6 +3,7 @@ package update
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -23,12 +24,14 @@ func TestScheduleDueAndMark(t *testing.T) {
 	if !schedule.Due(now.Add(72 * time.Hour)) {
 		t.Fatal("schedule should be due at interval")
 	}
-	mode, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mode.Mode().Perm() != 0o600 {
-		t.Fatalf("schedule permissions = %o, want 600", mode.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		mode, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if mode.Mode().Perm() != 0o600 {
+			t.Fatalf("schedule permissions = %o, want 600", mode.Mode().Perm())
+		}
 	}
 }
 
