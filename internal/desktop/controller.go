@@ -1,6 +1,7 @@
 package desktop
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"sync"
@@ -12,6 +13,7 @@ import (
 	dshdesktop "github.com/the-soloist/dsh-desktop"
 	"github.com/the-soloist/dsh-desktop/internal/appicon"
 	"github.com/the-soloist/dsh-desktop/internal/backend"
+	releaseupdate "github.com/the-soloist/dsh-desktop/internal/update"
 )
 
 type controller struct {
@@ -35,6 +37,13 @@ type controller struct {
 	proxyMu              sync.Mutex
 	authenticationProxy  *dshAuthenticationProxy
 	downloadMu           sync.Mutex
+	updateClient         *releaseupdate.Client
+	updateSchedule       *releaseupdate.Schedule
+	updateCheckMu        sync.Mutex
+	updateLifecycleMu    sync.Mutex
+	updateDialogMu       sync.Mutex
+	updateCancel         context.CancelFunc
+	updateDone           chan struct{}
 	smokeMu              sync.Mutex
 	smokeErr             error
 }
@@ -47,6 +56,18 @@ func newController(
 	logger *log.Logger,
 	startupConsoleOwned bool,
 ) *controller {
+	updateClient, updateErr := releaseupdate.NewClient(releaseupdate.DefaultRepository, "", nil)
+	if updateErr != nil {
+		logger.Printf("[update] cannot configure GitHub Releases client: %v", updateErr)
+	}
+	updateSchedulePath, scheduleErr := releaseupdate.Path(metadata.InternalName)
+	if scheduleErr != nil {
+		logger.Printf("[update] cannot resolve check schedule path: %v", scheduleErr)
+	}
+	var updateSchedule *releaseupdate.Schedule
+	if scheduleErr == nil {
+		updateSchedule = releaseupdate.NewSchedule(updateSchedulePath, updateCheckInterval)
+	}
 	return &controller{
 		app:                 app,
 		window:              window,
@@ -56,6 +77,8 @@ func newController(
 		startup:             newStartupTimeline("正在准备", "即将启动本地 DSH 服务…"),
 		startupConsoleOwned: startupConsoleOwned,
 		pendingIntent:       startupIntentInitial,
+		updateClient:        updateClient,
+		updateSchedule:      updateSchedule,
 	}
 }
 
@@ -92,6 +115,7 @@ func (controller *controller) bind() {
 		}
 		controller.window.ensureVisible()
 		controller.window.show()
+		controller.startUpdateChecks()
 		if smokeTestEnabled() {
 			controller.logger.Printf("[smoke] starting DSH without waiting for the startup frontend")
 			controller.startPendingService()
@@ -105,6 +129,7 @@ func (controller *controller) bindTray() {
 	menu.Add("显示主窗口").OnClick(func(*application.Context) { controller.window.show() })
 	menu.Add("强制刷新").OnClick(func(*application.Context) { controller.window.forceReload() })
 	menu.Add("重启 DSH").OnClick(func(*application.Context) { controller.requestRestart() })
+	menu.Add("检查更新").OnClick(func(*application.Context) { controller.requestUpdateCheck() })
 	menu.Add("关闭窗口").OnClick(func(*application.Context) { controller.window.close() })
 	menu.Add("完全退出").OnClick(func(*application.Context) { controller.quit() })
 	menu.AddSeparator()
@@ -178,6 +203,7 @@ func (controller *controller) quit() {
 
 func (controller *controller) shutdown() {
 	controller.quitting.Store(true)
+	controller.stopUpdateChecks()
 	controller.closeAuthenticationProxy()
 	controller.service.set(serviceQuitting)
 	if err := controller.window.store.Save(); err != nil {
