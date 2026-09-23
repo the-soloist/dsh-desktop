@@ -8,7 +8,7 @@ DSH Desktop 是基于 Go 和 Wails 构建的 DeepSeek DSH 桌面客户端。它�
 
 运行前请安装带有 `npx` 的 Node.js；如果同时安装了 [Bun](https://bun.sh)，应用会优先使用 `bunx`，找不到 `bunx` 时自动回退到 `npx`。
 
-每次启动或重启 DSH 时，应用都会先查询 npm registry 的 `latest` dist-tag，取得精确版本号，然后执行：
+每次启动或重启 DSH 时，应用都会查询 npm registry 已发布的版本，选择语义化版本最高的一个（包含预发布版本，不使用可能滞后的 `latest` dist-tag），然后执行：
 
 ```text
 bunx @deepseek-ai/dsh@<version> web --no-open

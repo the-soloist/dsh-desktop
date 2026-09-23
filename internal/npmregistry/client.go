@@ -12,11 +12,13 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/the-soloist/dsh-desktop/internal/update"
 )
 
 const (
 	DefaultURL        = "https://registry.npmjs.org"
-	responseBodyLimit = 1024 * 1024
+	responseBodyLimit = 4 * 1024 * 1024
 	requestTimeout    = 15 * time.Second
 )
 
@@ -53,37 +55,79 @@ func NewClient(registryURL string, httpClient *http.Client) (*Client, error) {
 	return &Client{baseURL: strings.TrimRight(parsed.String(), "/"), http: httpClient}, nil
 }
 
-// LatestVersion returns the exact semantic version assigned to the latest
-// dist-tag for packageName.
+// LatestVersion returns the highest published semantic version of packageName.
+// Prereleases count. The npm latest dist-tag is ignored because publishers can
+// leave it on an older channel while a newer alpha or next version exists.
 func (client *Client) LatestVersion(ctx context.Context, packageName string) (string, error) {
 	packageName = strings.TrimSpace(packageName)
 	if packageName == "" || strings.ContainsAny(packageName, " \t\r\n") {
 		return "", errors.New("invalid empty or whitespace-containing npm package name")
 	}
-	endpoint := client.baseURL + "/" + url.PathEscape(packageName) + "/latest"
+	endpoint := client.baseURL + "/" + url.PathEscape(packageName)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return "", fmt.Errorf("create npm registry request: %w", err)
 	}
-	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Accept", "application/vnd.npm.install-v1+json, application/json")
 	response, err := client.http.Do(request)
 	if err != nil {
-		return "", fmt.Errorf("query latest %s version: %w", packageName, err)
+		return "", fmt.Errorf("query %s versions: %w", packageName, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, responseBodyLimit))
-		return "", fmt.Errorf("query latest %s version: npm registry returned %s", packageName, response.Status)
+		return "", fmt.Errorf("query %s versions: npm registry returned %s", packageName, response.Status)
 	}
-	var metadata struct {
-		Version string `json:"version"`
+	var document struct {
+		DistTags map[string]string          `json:"dist-tags"`
+		Versions map[string]json.RawMessage `json:"versions"`
 	}
-	if err = json.NewDecoder(io.LimitReader(response.Body, responseBodyLimit)).Decode(&metadata); err != nil {
-		return "", fmt.Errorf("decode latest %s version: %w", packageName, err)
+	if err = json.NewDecoder(io.LimitReader(response.Body, responseBodyLimit)).Decode(&document); err != nil {
+		return "", fmt.Errorf("decode %s versions: %w", packageName, err)
 	}
-	metadata.Version = strings.TrimSpace(metadata.Version)
-	if !semanticVersion.MatchString(metadata.Version) {
-		return "", fmt.Errorf("npm registry returned invalid latest version %q for %s", metadata.Version, packageName)
+	version, ok := highestVersion(document.Versions, document.DistTags)
+	if !ok {
+		return "", fmt.Errorf("npm registry returned no valid versions for %s", packageName)
 	}
-	return metadata.Version, nil
+	return version, nil
+}
+
+func highestVersion(versions map[string]json.RawMessage, distTags map[string]string) (string, bool) {
+	var (
+		best       string
+		bestParsed update.Version
+		found      bool
+	)
+	consider := func(version string) {
+		version = strings.TrimSpace(version)
+		if !semanticVersion.MatchString(version) {
+			return
+		}
+		parsed, err := update.ParseVersion(version)
+		if err != nil {
+			return
+		}
+		if !found {
+			best = version
+			bestParsed = parsed
+			found = true
+			return
+		}
+		switch update.CompareVersion(parsed, bestParsed) {
+		case 1:
+			best = version
+			bestParsed = parsed
+		case 0:
+			if version > best {
+				best = version
+			}
+		}
+	}
+	for version := range versions {
+		consider(version)
+	}
+	for _, version := range distTags {
+		consider(version)
+	}
+	return best, found
 }
