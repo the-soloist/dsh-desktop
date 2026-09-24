@@ -1,102 +1,92 @@
 import * as wails from "/wails/runtime.js";
+import { createStartupState, applyStartupUpdate, startupPresentation } from "./state.js";
 
-const timeline = document.querySelector(".timeline");
-const pendingSteps = [];
-const minimumStepInterval = 180;
-let lastStepTime = 0;
-let timer = 0;
-let generation = 0;
+const status = document.querySelector(".status");
+const title = document.querySelector("#status-title");
+const message = document.querySelector("#status-message");
+const details = document.querySelector(".details");
+const log = document.querySelector(".log");
+const actions = document.querySelector(".actions");
+const retry = document.querySelector("#retry");
+const copy = document.querySelector("#copy");
+const feedback = document.querySelector("#feedback");
+let state = createStartupState();
 
-function displayTime(value) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "--:--:--";
-  return date.toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
+function renderStatus() {
+  const view = startupPresentation(state);
+  status.classList.toggle("failed", view.failed);
+  status.setAttribute("aria-busy", String(!view.failed));
+  if (title.textContent !== view.title) title.textContent = view.title;
+  message.textContent = view.message;
+  message.hidden = !view.message;
+  actions.hidden = !view.failed && !details.open;
+  retry.hidden = !view.failed;
 }
 
-function completeCurrentStep() {
-  const current = timeline.querySelector(".step.current");
-  if (!current) return;
-  current.classList.remove("current");
-  current.classList.add("complete");
-}
-
-function renderStep(step) {
-  completeCurrentStep();
-
-  const item = document.createElement("article");
-  item.className = `step ${step.failed ? "failed" : "current"} entering`;
-
-  const rail = document.createElement("span");
-  rail.className = "rail";
-  rail.setAttribute("aria-hidden", "true");
-
-  const content = document.createElement("div");
-  content.className = "content";
-
+function appendLog(step) {
+  const row = document.createElement("div");
+  row.className = "log-entry";
   const heading = document.createElement("div");
-  heading.className = "step-heading";
-
-  const title = document.createElement("h2");
-  title.textContent = step.status;
-
-  const startedAt = document.createElement("time");
-  startedAt.dateTime = step.startedAt;
-  startedAt.textContent = displayTime(step.startedAt);
-
-  const detail = document.createElement("p");
-  detail.textContent = step.detail;
-  if (step.code) detail.classList.add("command");
-
-  heading.append(title, startedAt);
-  content.append(heading);
-  if (step.detail) content.append(detail);
-  item.append(rail, content);
-  timeline.append(item);
-
-  requestAnimationFrame(() => requestAnimationFrame(() => item.classList.remove("entering")));
-  item.scrollIntoView({ behavior: "smooth", block: "nearest" });
-
-  if (step.navigate) {
-    window.setTimeout(() => void wails.Events.Emit("startup:navigate"), 320);
+  const time = document.createElement("time");
+  const date = new Date(step.startedAt);
+  time.dateTime = step.startedAt;
+  time.textContent = Number.isNaN(date.getTime()) ? "--:--:--" : date.toLocaleTimeString([], { hour12: false });
+  const label = document.createElement("span");
+  label.textContent = step.status;
+  heading.append(time, label);
+  row.append(heading);
+  if (step.detail) {
+    const detail = document.createElement(step.code ? "code" : "p");
+    detail.textContent = step.detail;
+    row.append(detail);
   }
+  log.append(row);
 }
 
-function drainSteps(expectedGeneration) {
-  if (expectedGeneration !== generation || pendingSteps.length === 0) {
-    timer = 0;
-    return;
-  }
-  const delay = Math.max(0, minimumStepInterval - (performance.now() - lastStepTime));
-  timer = window.setTimeout(() => {
-    if (expectedGeneration !== generation) {
-      timer = 0;
-      return;
-    }
-    renderStep(pendingSteps.shift());
-    lastStepTime = performance.now();
-    timer = 0;
-    drainSteps(expectedGeneration);
-  }, delay);
-}
-
-function receiveUpdate(event) {
+wails.Events.On("startup:update", (event) => {
   const update = event.data ?? event;
+  const follow = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
   if (update.reset) {
-    generation += 1;
-    pendingSteps.length = 0;
-    timeline.replaceChildren();
-    if (timer) window.clearTimeout(timer);
-    timer = 0;
-    lastStepTime = 0;
+    log.replaceChildren();
+    details.open = false;
+    retry.disabled = false;
+    copy.disabled = false;
+    feedback.textContent = "";
   }
-  pendingSteps.push(...(update.steps ?? []));
-  if (!timer) drainSteps(generation);
-}
+  state = applyStartupUpdate(state, update);
+  for (const step of update.steps ?? []) appendLog(step);
+  renderStatus();
+  if (details.open && follow) log.scrollTop = log.scrollHeight;
+});
 
-wails.Events.On("startup:update", receiveUpdate);
+details.addEventListener("toggle", renderStatus);
+retry.addEventListener("click", async () => {
+  retry.disabled = true;
+  feedback.textContent = "";
+  try {
+    await wails.Events.Emit("startup:retry");
+  } catch {
+    retry.disabled = false;
+    feedback.textContent = "无法重试，请从托盘菜单重启 DSH。";
+  }
+});
+
+copy.addEventListener("click", async () => {
+  copy.disabled = true;
+  feedback.textContent = "";
+  try {
+    await wails.Events.Emit("startup:copy-diagnostics");
+  } catch {
+    copy.disabled = false;
+    feedback.textContent = "复制失败，请展开启动详情手动复制。";
+  }
+});
+wails.Events.On("startup:diagnostics-copied", (event) => {
+  copy.disabled = false;
+  feedback.textContent = event.data === true ? "诊断信息已复制" : "复制失败，请展开启动详情手动复制。";
+});
+
+renderStatus();
+const clock = window.setInterval(renderStatus, 1000);
+window.addEventListener("pagehide", () => window.clearInterval(clock), { once: true });
 void wails.Events.Emit("startup:frontend-ready");

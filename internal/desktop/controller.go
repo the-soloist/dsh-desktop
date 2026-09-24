@@ -3,7 +3,6 @@ package desktop
 import (
 	"context"
 	"log"
-	"net/http"
 	"sync"
 	"sync/atomic"
 
@@ -29,12 +28,10 @@ type controller struct {
 	startupConsoleOwned  bool
 	quitting             atomic.Bool
 	appStarted           atomic.Bool
-	pendingNavigation    atomic.Bool
 	smokeScheduled       atomic.Bool
 	intentMu             sync.Mutex
 	pendingIntent        startupIntent
 	navigationMu         sync.Mutex
-	navigationCookie     *http.Cookie
 	navigationGeneration uint64
 	proxyMu              sync.Mutex
 	authenticationProxy  *dshAuthenticationProxy
@@ -99,11 +96,8 @@ func (controller *controller) bind() {
 	})
 
 	controller.app.Event.On(startupFrontendReadyEvent, controller.onStartupFrontendReady)
-	controller.app.Event.On(startupNavigateEvent, func(event *application.CustomEvent) {
-		if event.Sender == "" || event.Sender == controller.window.window.Name() {
-			controller.navigateToDSH()
-		}
-	})
+	controller.app.Event.On(startupRetryEvent, controller.onStartupRetry)
+	controller.app.Event.On(startupCopyEvent, controller.onStartupCopy)
 	controller.bindTray()
 	controller.app.Event.OnApplicationEvent(events.Mac.ApplicationShouldHandleReopen, func(*application.ApplicationEvent) {
 		controller.window.show()
@@ -161,21 +155,37 @@ func (controller *controller) startPendingService() {
 	}
 }
 
+func (controller *controller) onStartupRetry(event *application.CustomEvent) {
+	if event.Sender != "" && event.Sender != controller.window.window.Name() {
+		return
+	}
+	phase := controller.service.current()
+	if phase == serviceFailed || phase == serviceStopped {
+		controller.requestRestart()
+	}
+}
+
+func (controller *controller) onStartupCopy(event *application.CustomEvent) {
+	if event.Sender != "" && event.Sender != controller.window.window.Name() {
+		return
+	}
+	success := controller.app.Clipboard.SetText(controller.startup.diagnostics())
+	controller.window.window.EmitEvent(startupCopiedEvent, success)
+}
+
 func (controller *controller) requestRestart() {
 	if !controller.service.scheduleRestart() {
 		return
 	}
-	controller.logger.Printf("[dsh] restart requested from tray")
-	controller.startup.reset("正在重启 DSH", "正在停止现有服务…", false)
+	controller.logger.Printf("[dsh] restart requested")
+	controller.startup.reset(startupPreparing, "正在重启 DSH", "正在停止现有服务…")
 	controller.requestStartupPage(startupIntentRestart)
 }
 
 func (controller *controller) requestStartupPage(intent startupIntent) {
 	controller.closeAuthenticationProxy()
-	controller.pendingNavigation.Store(false)
 	controller.navigationMu.Lock()
 	controller.navigationGeneration++
-	controller.navigationCookie = nil
 	controller.navigationMu.Unlock()
 	controller.intentMu.Lock()
 	controller.pendingIntent = intent

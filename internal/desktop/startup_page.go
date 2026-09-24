@@ -17,19 +17,32 @@ import (
 const (
 	startupUpdateEvent        = "startup:update"
 	startupFrontendReadyEvent = "startup:frontend-ready"
-	startupNavigateEvent      = "startup:navigate"
+	startupRetryEvent         = "startup:retry"
+	startupCopyEvent          = "startup:copy-diagnostics"
+	startupCopiedEvent        = "startup:diagnostics-copied"
+)
+
+type startupPhase string
+
+const (
+	startupPreparing  startupPhase = "preparing"
+	startupVersion    startupPhase = "version"
+	startupLaunching  startupPhase = "launching"
+	startupConnecting startupPhase = "connecting"
+	startupFailed     startupPhase = "failed"
+	startupStopped    startupPhase = "stopped"
 )
 
 //go:embed startup
 var startupAssets embed.FS
 
 type startupStatus struct {
-	Status    string `json:"status"`
-	Detail    string `json:"detail"`
-	StartedAt string `json:"startedAt"`
-	Failed    bool   `json:"failed"`
-	Navigate  bool   `json:"navigate"`
-	Code      bool   `json:"code,omitempty"`
+	Phase     startupPhase `json:"phase,omitempty"`
+	Status    string       `json:"status"`
+	Detail    string       `json:"detail"`
+	StartedAt string       `json:"startedAt"`
+	Summary   string       `json:"summary,omitempty"`
+	Code      bool         `json:"code,omitempty"`
 }
 
 type startupUpdate struct {
@@ -51,25 +64,24 @@ const (
 )
 
 func newStartupTimeline(status, detail string) *startupTimeline {
-	return &startupTimeline{steps: []startupStatus{newStartupStatus(status, detail, false, false)}}
+	return &startupTimeline{steps: []startupStatus{newStartupStatus(startupPreparing, status, detail)}}
 }
 
-func newStartupStatus(status, detail string, failed, navigate bool) startupStatus {
+func newStartupStatus(phase startupPhase, status, detail string) startupStatus {
 	return startupStatus{
-		Status:    status,
-		Detail:    detail,
+		Phase:     phase,
+		Status:    redactSensitiveOutput(status),
+		Detail:    redactSensitiveOutput(detail),
 		StartedAt: time.Now().Format(time.RFC3339Nano),
-		Failed:    failed,
-		Navigate:  navigate,
 	}
 }
 
-func (timeline *startupTimeline) append(status, detail string, failed, navigate bool) startupUpdate {
-	return timeline.appendStep(newStartupStatus(status, detail, failed, navigate))
+func (timeline *startupTimeline) append(phase startupPhase, status, detail string) startupUpdate {
+	return timeline.appendStep(newStartupStatus(phase, status, detail))
 }
 
 func (timeline *startupTimeline) appendCommand(status, command string) startupUpdate {
-	step := newStartupStatus(status, command, false, false)
+	step := newStartupStatus(startupLaunching, status, command)
 	step.Code = true
 	return timeline.appendStep(step)
 }
@@ -81,10 +93,13 @@ func (timeline *startupTimeline) appendStep(step startupStatus) startupUpdate {
 	return startupUpdate{Steps: []startupStatus{step}}
 }
 
-func (timeline *startupTimeline) reset(status, detail string, failed bool) startupUpdate {
+func (timeline *startupTimeline) reset(phase startupPhase, status, detail string) startupUpdate {
 	timeline.mu.Lock()
 	defer timeline.mu.Unlock()
-	step := newStartupStatus(status, detail, failed, false)
+	step := newStartupStatus(phase, status, detail)
+	if phase == startupFailed || phase == startupStopped {
+		step.Summary, _, _ = strings.Cut(step.Detail, "\n")
+	}
 	timeline.steps = []startupStatus{step}
 	return startupUpdate{Reset: true, Steps: []startupStatus{step}}
 }
@@ -94,6 +109,23 @@ func (timeline *startupTimeline) snapshot() startupUpdate {
 	defer timeline.mu.Unlock()
 	steps := append([]startupStatus(nil), timeline.steps...)
 	return startupUpdate{Reset: true, Steps: steps}
+}
+
+func (timeline *startupTimeline) fail(summary, detail string) startupUpdate {
+	step := newStartupStatus(startupFailed, "DSH 启动失败", detail)
+	step.Summary = redactSensitiveOutput(summary)
+	return timeline.appendStep(step)
+}
+
+func (timeline *startupTimeline) diagnostics() string {
+	var text strings.Builder
+	for _, step := range timeline.snapshot().Steps {
+		fmt.Fprintf(&text, "%s %s\n", step.StartedAt, step.Status)
+		if step.Detail != "" {
+			fmt.Fprintf(&text, "%s\n", step.Detail)
+		}
+	}
+	return text.String()
 }
 
 func startupAssetHandler(applicationName string) http.Handler {

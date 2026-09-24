@@ -53,6 +53,9 @@ jobs:
           mkdir -p dist/intermediate
           bun build build.ts --target=bun --outfile=dist/intermediate/build-validation.js
 
+      - name: Test | Startup UI
+        run: bun test tests
+
   build:
     needs: quality
     uses: ./.github/workflows/native-build.yml

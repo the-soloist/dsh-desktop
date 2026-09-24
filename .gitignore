@@ -4,7 +4,7 @@
 *.AppImage
 *.msi
 *.7z
-DshDesktop-binary
+dsh-desktop-gui
 DshDesktop.exe
 DshDesktop.app/
 .DS_Store

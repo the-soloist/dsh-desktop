@@ -12,8 +12,8 @@ import (
 
 func TestStartupTimelinePreservesStatusHistoryAndStartTimes(t *testing.T) {
 	timeline := newStartupTimeline("第一步", "准备")
-	update := timeline.append("第二步", "启动", false, true)
-	if len(update.Steps) != 1 || update.Steps[0].Status != "第二步" || !update.Steps[0].Navigate {
+	update := timeline.append(startupLaunching, "第二步", "启动")
+	if len(update.Steps) != 1 || update.Steps[0].Status != "第二步" || update.Steps[0].Phase != startupLaunching {
 		t.Fatalf("append update = %#v", update)
 	}
 	snapshot := timeline.snapshot()
@@ -29,11 +29,40 @@ func TestStartupTimelinePreservesStatusHistoryAndStartTimes(t *testing.T) {
 
 func TestStartupTimelineResetClearsPreviousStatuses(t *testing.T) {
 	timeline := newStartupTimeline("旧状态一", "")
-	timeline.append("旧状态二", "", false, false)
-	timeline.reset("新状态", "", false)
+	timeline.append(startupLaunching, "旧状态二", "")
+	timeline.reset(startupPreparing, "新状态", "")
 	snapshot := timeline.snapshot()
 	if len(snapshot.Steps) != 1 || snapshot.Steps[0].Status != "新状态" {
 		t.Fatalf("snapshot after reset = %#v", snapshot)
+	}
+}
+
+func TestStartupFailureKeepsSummarySeparateAndRedactsDiagnostics(t *testing.T) {
+	timeline := newStartupTimeline("准备", "检查环境")
+	timeline.appendCommand("启动", "bunx example@1.0.0 web --no-open --port 3080")
+	failure := timeline.fail("无法连接 DSH。", "GET http://127.0.0.1:3080/?token=private-token: connection refused")
+	step := failure.Steps[0]
+	if step.Phase != startupFailed || step.Summary != "无法连接 DSH。" {
+		t.Fatalf("failure = %#v", step)
+	}
+	if strings.Contains(step.Detail, "private-token") || !strings.Contains(step.Detail, "<redacted>") {
+		t.Fatalf("failure detail not redacted: %s", step.Detail)
+	}
+	diagnostics := timeline.diagnostics()
+	if !strings.Contains(diagnostics, "bunx example@1.0.0") || !strings.Contains(diagnostics, "connection refused") || strings.Contains(diagnostics, "private-token") {
+		t.Fatalf("unexpected diagnostics: %s", diagnostics)
+	}
+	timeline.reset(startupPreparing, "重新启动", "检查环境")
+	if strings.Contains(timeline.diagnostics(), "connection refused") {
+		t.Fatal("retry kept the previous failure diagnostics")
+	}
+}
+
+func TestStoppedStartupKeepsProcessErrorInDetails(t *testing.T) {
+	timeline := newStartupTimeline("准备", "")
+	update := timeline.reset(startupStopped, "DSH 已停止", "请重试。\n\nexit status 1")
+	if update.Steps[0].Summary != "请重试。" || !strings.Contains(update.Steps[0].Detail, "exit status 1") {
+		t.Fatalf("stopped status = %#v", update.Steps[0])
 	}
 }
 
@@ -52,8 +81,9 @@ func TestStartupAssets(t *testing.T) {
 		contains    string
 	}{
 		{path: "/", contentType: "text/html", contains: `/logo.png`},
-		{path: "/styles.css", contentType: "text/css", contains: ".step-heading time"},
+		{path: "/styles.css", contentType: "text/css", contains: ".log-entry time"},
 		{path: "/app.js", contentType: "text/javascript", contains: `startup:frontend-ready`},
+		{path: "/state.js", contentType: "text/javascript", contains: `applyStartupUpdate`},
 		{path: "/logo.png", contentType: "image/png"},
 	}
 	handler := startupAssetHandler("DSH Desktop")

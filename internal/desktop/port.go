@@ -47,7 +47,7 @@ func (controller *controller) prepareService(restart bool) bool {
 		controller.showStartupFailure("无法解析 DSH 端口。", err)
 		return false
 	}
-	controller.setStartupStatus("正在检查已有 DSH", "正在检查其他 DSH 进程，随后检查可用端口…", false)
+	controller.setStartupStatus(startupPreparing, "正在检查已有 DSH", "正在检查其他 DSH 进程，随后检查可用端口…")
 	preparation := newLaunchPreparation(controller.backend, controller.confirmExternalDSH)
 	plan, err := preparation.prepare(ctx, preferredPort)
 	if err != nil {
@@ -64,6 +64,6 @@ func (controller *controller) prepareService(restart bool) bool {
 		controller.showDSH("正在加载现有 DSH 服务…", nil)
 		return false
 	}
-	controller.setStartupStatus("启动端口已确定", "将使用 "+controller.backend.URL()+" 启动 DSH。", false)
+	controller.setStartupStatus(startupPreparing, "启动端口已确定", "将使用 "+controller.backend.URL()+" 启动 DSH。")
 	return true
 }

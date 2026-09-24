@@ -6,7 +6,7 @@ import { run } from "../command";
 import { macOSInfoPlist } from "../templates";
 
 export async function buildMacOS(context: BuildContext): Promise<void> {
-  const binary = path.join(context.intermediate, `${context.metadata.internalName}-binary`);
+  const binary = path.join(context.intermediate, "dsh-desktop-gui");
   const bundleName = `${context.metadata.displayName}.app`;
   const bundle = path.join(context.platformOutput, bundleName);
   const contents = path.join(bundle, "Contents");

@@ -33,7 +33,7 @@ func (controller *controller) runServiceAction(restart bool) {
 		return
 	}
 
-	controller.setStartupStatus("正在检查运行环境", "正在读取环境并查找 bunx、npx 与 Node.js…", false)
+	controller.setStartupStatus(startupPreparing, "正在检查运行环境", "正在读取环境并查找 bunx、npx 与 Node.js…")
 	runtimeEnvironment, err := dshenv.Resolve(os.Environ())
 	if runtimeEnvironment.ShellError != nil {
 		controller.logger.Printf("[environment] shell import skipped: %v", runtimeEnvironment.ShellError)
@@ -72,7 +72,7 @@ func (controller *controller) runServiceAction(restart bool) {
 			dshenv.EnvironmentValue(runtimeEnvironment.Environment, "TEMP"),
 		)
 	}
-	controller.setStartupStatus("正在获取 DSH 版本", "正在从 npm registry 查询最新版本…", false)
+	controller.setStartupStatus(startupVersion, "正在获取 DSH 版本", "正在从 npm registry 查询最新版本…")
 	registryClient, err := npmregistry.NewClient(runtimeEnvironment.RegistryURL, nil)
 	if err != nil {
 		controller.showStartupFailure("npm registry 配置无效。", err)
@@ -82,7 +82,7 @@ func (controller *controller) runServiceAction(restart bool) {
 	latestVersion, err := registryClient.LatestVersion(versionContext, controller.metadata.DSHPackage)
 	cancelVersionLookup()
 	if err != nil {
-		controller.showStartupFailure("无法获取 DSH 最新版本。", err)
+		controller.showStartupFailure("无法获取 DSH 版本，请检查网络或 registry 配置。", err)
 		return
 	}
 	if controller.quitting.Load() {
@@ -135,7 +135,7 @@ func (controller *controller) launchDSH(runner dshenv.PackageRunner, packageRefe
 		return
 	}
 
-	controller.setStartupStatus("正在等待 DSH", "DSH 进程已启动，正在等待服务和插件完成初始化…", false)
+	controller.setStartupStatus(startupLaunching, "正在等待 DSH", "DSH 进程已启动，正在等待服务和插件完成初始化…")
 	summaryDone := make(chan struct{})
 	go controller.consumeOutputSummary(process, summaryLines, summaryDone)
 	waitErr := controller.backend.WaitForReady(controller.serviceContext, process, startTimeout())
@@ -164,7 +164,7 @@ func (controller *controller) launchDSH(runner dshenv.PackageRunner, packageRefe
 	}
 	probeStatus := controller.backend.Probe(context.Background())
 	if probeStatus == backend.ProbeAuthenticationRequired && !hasDSHAuthenticationToken(navigationURL) {
-		controller.setStartupStatus("正在等待认证地址", "DSH 已要求认证，正在等待 dsh web 输出认证地址…", false)
+		controller.setStartupStatus(startupConnecting, "正在等待认证地址", "DSH 已要求认证，正在等待 dsh web 输出认证地址…")
 		if url, ok := waitForDSHWebURL(webURLs, process.Done(), authenticationURLWait); ok {
 			navigationURL = url
 		}
@@ -179,7 +179,7 @@ func (controller *controller) launchDSH(runner dshenv.PackageRunner, packageRefe
 	}
 	var authenticationCookie *http.Cookie
 	if probeStatus == backend.ProbeAuthenticationRequired {
-		controller.setStartupStatus("正在获取认证 Cookie", "正在通过本地网络请求交换 dsh web 输出的 /?token=xxx…，成功后将注入 WebView Cookie。", false)
+		controller.setStartupStatus(startupConnecting, "正在获取认证 Cookie", "正在通过本地网络请求交换认证地址并验证会话 Cookie…")
 		cookieContext, cancelCookieExchange := context.WithTimeout(controller.serviceContext, 15*time.Second)
 		authenticationCookie, waitErr = exchangeDSHAuthenticationCookie(cookieContext, navigationURL, address)
 		cancelCookieExchange()
@@ -243,7 +243,8 @@ func (controller *controller) consumeOutputSummary(process *backend.Process, lin
 				continue
 			}
 			reported[key] = struct{}{}
-			controller.setStartupStatus(status, detail, false)
+			// Process output adds diagnostics without changing the active phase.
+			controller.setStartupStatus("", status, detail)
 		case <-done:
 			return
 		case <-process.Done():
@@ -259,7 +260,7 @@ func (controller *controller) monitorBackend(process *backend.Process) {
 		if !controller.backend.ClearIfCurrent(process) || controller.quitting.Load() {
 			return
 		}
-		message := "DSH 服务已停止。请从托盘菜单选择“重启 DSH”。"
+		message := "DSH 服务已停止，请点击重试重新启动。"
 		if processErr := process.WaitError(); processErr != nil {
 			controller.logger.Printf("[dsh] process exited: %v", processErr)
 			message += "\n\n" + processErr.Error()
@@ -270,7 +271,7 @@ func (controller *controller) monitorBackend(process *backend.Process) {
 		}
 		controller.service.set(serviceStopped)
 		controller.logger.Printf("[startup] DSH 已停止 — %s", strings.ReplaceAll(message, "\n", " "))
-		controller.startup.reset("DSH 已停止", message, true)
+		controller.startup.reset(startupStopped, "DSH 已停止", message)
 		controller.requestStartupPage(startupIntentNone)
 		controller.scheduleSmokeFailureExit()
 	}()
@@ -283,9 +284,9 @@ func (controller *controller) stopProcess(process *backend.Process) {
 	}
 }
 
-func (controller *controller) setStartupStatus(status, detail string, failed bool) {
+func (controller *controller) setStartupStatus(phase startupPhase, status, detail string) {
 	controller.logger.Printf("[startup] %s — %s", status, strings.ReplaceAll(detail, "\n", " "))
-	controller.window.window.EmitEvent(startupUpdateEvent, controller.startup.append(status, detail, failed, false))
+	controller.window.window.EmitEvent(startupUpdateEvent, controller.startup.append(phase, status, detail))
 }
 
 func (controller *controller) setStartupCommand(status, command string) {
@@ -299,69 +300,52 @@ func (controller *controller) showStartupFailure(summary string, failure error) 
 		detail += "\n\n" + failure.Error()
 	}
 	controller.service.set(serviceFailed)
-	displayDetail := detail + "\n\n请修复问题后从托盘菜单选择“重启 DSH”。"
-	controller.logger.Printf("[startup] DSH 启动失败 — %s", strings.ReplaceAll(detail, "\n", " "))
-	controller.window.window.EmitEvent(startupUpdateEvent, controller.startup.append("DSH 启动失败", displayDetail, true, false))
+	controller.logger.Printf("[startup] DSH 启动失败 — %s", strings.ReplaceAll(redactSensitiveOutput(detail), "\n", " "))
+	controller.window.window.EmitEvent(startupUpdateEvent, controller.startup.fail(summary, detail))
 	controller.window.show()
 	controller.recordSmokeFailure(errors.New(detail))
 	controller.scheduleSmokeFailureExit()
 }
 
 func (controller *controller) showDSH(message string, authenticationCookie *http.Cookie) {
-	controller.service.set(serviceReady)
 	controller.logger.Printf("[dsh] ready: %s", controller.backend.URL())
-	authenticationRequired := authenticationCookie != nil
-	if authenticationRequired {
-		message = "服务已就绪，正在建立 WebView 会话…"
-	}
-	controller.logger.Printf("[startup] DSH 已就绪 — %s", message)
 	controller.navigationMu.Lock()
-	controller.navigationCookie = authenticationCookie
 	controller.navigationGeneration++
+	generation := controller.navigationGeneration
 	controller.navigationMu.Unlock()
-	controller.pendingNavigation.Store(true)
-	controller.window.window.EmitEvent(startupUpdateEvent, controller.startup.append("DSH 已就绪", message, false, !authenticationRequired))
-	if authenticationRequired {
-		controller.setStartupStatus("正在建立 WebView 会话", "准备使用网络请求获得的 Cookie 建立认证连接…", false)
-	}
-	time.AfterFunc(5*time.Second, controller.navigateToDSH)
+	controller.setStartupStatus(startupConnecting, "DSH 已就绪", message)
+	controller.navigateToDSH(authenticationCookie, generation)
 }
 
-func (controller *controller) navigateToDSH() {
-	if controller.quitting.Load() || !controller.pendingNavigation.CompareAndSwap(true, false) {
+func (controller *controller) navigateToDSH(authenticationCookie *http.Cookie, generation uint64) {
+	if !controller.navigationIsCurrent(generation) {
 		return
 	}
-	controller.navigationMu.Lock()
-	navigationGeneration := controller.navigationGeneration
-	authenticationCookie := controller.navigationCookie
-	controller.navigationCookie = nil
-	controller.navigationMu.Unlock()
 	if authenticationCookie == nil {
-		if !controller.navigationIsCurrent(navigationGeneration) {
-			return
-		}
 		controller.closeAuthenticationProxy()
 		controller.logger.Printf("[dsh] opening DSH URL: %s", controller.backend.URL())
 		controller.window.window.SetURL(controller.backend.URL())
+		controller.service.set(serviceReady)
 		controller.window.show()
 		controller.scheduleSmokeSuccess()
 		return
 	}
 
-	controller.setStartupStatus("正在注入 WebView Cookie", "正在把网络请求获得的认证 Cookie 注入 WebView 请求…", false)
+	controller.setStartupStatus(startupConnecting, "正在建立认证连接", "正在创建本地代理，为 WebView 请求注入已验证的 Cookie…")
 	proxy, err := newDSHAuthenticationProxy(controller.backend.URL(), authenticationCookie)
 	if err != nil {
 		controller.showStartupFailure("无法建立 DSH WebView 会话。", err)
 		return
 	}
-	if !controller.navigationIsCurrent(navigationGeneration) {
+	if !controller.navigationIsCurrent(generation) {
 		_ = proxy.Close()
 		return
 	}
 	controller.replaceAuthenticationProxy(proxy)
-	controller.setStartupStatus("Cookie 已生效", "已通过本地网络请求验证 Cookie，并注入后续 WebView 请求，正在加载 DSH 页面…", false)
+	controller.setStartupStatus(startupConnecting, "认证连接已就绪", "Cookie 已验证，认证代理已就绪，正在加载 DSH 页面…")
 	controller.logger.Printf("[dsh] opening authenticated WebView proxy: %s", proxy.URL())
 	controller.window.window.SetURL(proxy.URL())
+	controller.service.set(serviceReady)
 	controller.window.show()
 	controller.scheduleSmokeSuccess()
 }
