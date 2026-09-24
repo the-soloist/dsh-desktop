@@ -217,6 +217,57 @@ func TestDSHHomePrefersToolConfigurationThenXDGThenDefault(t *testing.T) {
 
 func TestResolveProducesOneRuntimeEnvironment(t *testing.T) {
 	home := t.TempDir()
+	resolved, err := Resolve(runtimeTestEnvironment(t, home))
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if resolved.Runner.Name != RunnerBunx {
+		t.Errorf("runner name = %q, want %q", resolved.Runner.Name, RunnerBunx)
+	}
+	assertSamePath(t, "runner", resolved.Runner.Path, filepath.Join(home, "bun", "bin", executableName("bunx")))
+	assertSamePath(t, "node", resolved.NodePath, filepath.Join(home, "node", "bin", executableName("node")))
+	assertSamePath(t, "DSH_HOME", resolved.DSHHome, filepath.Join(home, "xdg-config", "dsh"))
+	assertSamePath(t, "workspace", resolved.Workspace, filepath.Join(home, "workspace"))
+	path := filepath.SplitList(EnvironmentValue(resolved.Environment, "PATH"))
+	if len(path) < 2 {
+		t.Fatalf("resolved PATH = %#v, want bun and node directories first", path)
+	}
+	assertSamePath(t, "PATH[0]", path[0], filepath.Join(home, "bun", "bin"))
+	assertSamePath(t, "PATH[1]", path[1], filepath.Join(home, "node", "bin"))
+	for _, check := range []struct {
+		name, got, want string
+	}{
+		{"DSH_HOME", EnvironmentValue(resolved.Environment, "DSH_HOME"), resolved.DSHHome},
+		{"DSH_WORKSPACE", EnvironmentValue(resolved.Environment, "DSH_WORKSPACE"), resolved.Workspace},
+		{"PATH[0]", path[0], filepath.Dir(resolved.Runner.Path)},
+		{"PATH[1]", path[1], filepath.Dir(resolved.NodePath)},
+	} {
+		if check.got != check.want {
+			t.Errorf("environment %s = %q, want runtime value %q", check.name, check.got, check.want)
+		}
+	}
+}
+
+// Runtime paths can have different spellings after Windows short-name expansion.
+// Compare file identity without using the production normalizer as the oracle.
+func assertSamePath(t *testing.T, name, got, want string) {
+	t.Helper()
+	gotInfo, err := os.Stat(got)
+	if err != nil {
+		t.Errorf("%s = %q, want same file as %q: %v", name, got, want, err)
+		return
+	}
+	wantInfo, err := os.Stat(want)
+	if err != nil {
+		t.Fatalf("stat expected %s path %q: %v", name, want, err)
+	}
+	if !os.SameFile(gotInfo, wantInfo) {
+		t.Errorf("%s = %q, want same file as %q", name, got, want)
+	}
+}
+
+func runtimeTestEnvironment(t *testing.T, home string) []string {
+	t.Helper()
 	bunInstall := filepath.Join(home, "bun")
 	nodeHome := filepath.Join(home, "node")
 	workspace := filepath.Join(home, "workspace")
@@ -240,32 +291,15 @@ func TestResolveProducesOneRuntimeEnvironment(t *testing.T) {
 		}
 	}
 
-	resolved, err := Resolve([]string{
+	return []string{
 		"HOME=" + home,
 		"PATH=",
 		"BUN_INSTALL=" + bunInstall,
 		"NODE_HOME=" + nodeHome,
 		"XDG_CONFIG_HOME=" + xdgConfigHome,
 		"DSH_WORKSPACE=" + workspace,
-	})
-	if err != nil {
-		t.Fatalf("Resolve() error = %v", err)
-	}
-	if resolved.Runner.Name != RunnerBunx || resolved.Runner.Path != filepath.Join(bunInstall, "bin", executableName("bunx")) {
-		t.Errorf("runner = %#v", resolved.Runner)
-	}
-	if resolved.NodePath != filepath.Join(nodeHome, "bin", executableName("node")) {
-		t.Errorf("node = %q", resolved.NodePath)
-	}
-	if resolved.DSHHome != filepath.Join(xdgConfigHome, "dsh") {
-		t.Errorf("DSH_HOME = %q", resolved.DSHHome)
-	}
-	if resolved.Workspace != workspace {
-		t.Errorf("workspace = %q", resolved.Workspace)
-	}
-	path := filepath.SplitList(EnvironmentValue(resolved.Environment, "PATH"))
-	if len(path) < 2 || path[0] != filepath.Join(bunInstall, "bin") || path[1] != filepath.Join(nodeHome, "bin") {
-		t.Errorf("resolved PATH = %#v", path)
+		"TMP=" + home,
+		"TEMP=" + home,
 	}
 }
 
