@@ -11,12 +11,16 @@ DSH Desktop 是基于 Go 和 Wails 构建的 DeepSeek DSH 桌面客户端。它�
 每次启动或重启 DSH 时，应用都会查询 npm registry 已发布的版本，选择语义化版本最高的一个（包含预发布版本，不使用可能滞后的 `latest` dist-tag），然后执行：
 
 ```text
-bunx @deepseek-ai/dsh@<version> web --no-open
+bunx @deepseek-ai/dsh@<version> web --no-open --port <port>
 ```
 
 回退到 Node.js 时会执行等价的 `npx` 命令。可通过 `DSH_NPM_REGISTRY` 指定 registry；未设置时依次使用 `NPM_CONFIG_REGISTRY` 和 npm 官方 registry。
 
 DSH 输出带认证 token 的启动地址时，应用会自动用它建立 WebView 会话。token 只在内存中短暂使用，终端日志和启动页面只显示脱敏后的地址。
+
+启动和重启时，应用先检查已有 DSH 进程（包括其他端口上的实例），再检查可用端口。当前地址上无需认证的稳定 DSH 服务可以直接复用；其他已识别实例会提示选择结束并重新启动，或保留它们并启动新实例，也可以取消。结束进程前会重新核对进程身份，不会按端口号结束未知程序。
+
+新实例优先使用 3080（同一次运行中重启优先沿用上次端口），被占用时向后检查最多 50 个端口。端口检查使用实际 TCP 绑定，因此非 HTTP 程序占用端口也会被跳过。无界面 smoke test 使用相同检查流程，但始终保留外部 DSH 进程。
 
 ## 运行环境
 

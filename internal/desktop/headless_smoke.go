@@ -40,14 +40,23 @@ func runHeadlessSmokeTest() (result error) {
 		}
 	}()
 
-	switch supervisor.Probe(context.Background()) {
-	case backend.ProbeReady:
-		logger.Printf("[smoke] reused DSH at %s", metadata.DSHURL)
+	preferredPort, err := portFromURL(metadata.DSHURL)
+	if err != nil {
+		return err
+	}
+	preparation := newLaunchPreparation(supervisor,
+		func(_ context.Context, processes []backend.DSHProcess) (externalDSHChoice, error) {
+			logger.Printf("[smoke] preserving %d existing DSH instances", len(processes))
+			return externalDSHOtherPort, nil
+		})
+	plan, err := preparation.prepare(context.Background(), preferredPort)
+	if err != nil {
+		return err
+	}
+	supervisor.SetURL(loopbackURL(plan.port))
+	if plan.reuse {
+		logger.Printf("[smoke] reused DSH at %s", supervisor.URL())
 		return nil
-	case backend.ProbeAuthenticationRequired:
-		return fmt.Errorf("%s is served by an authenticated external DSH process", metadata.DSHURL)
-	case backend.ProbeUnexpected:
-		return fmt.Errorf("%s is occupied by a non-DSH service", metadata.DSHURL)
 	}
 
 	runtimeEnvironment, err := dshenv.Resolve(os.Environ())
@@ -73,6 +82,7 @@ func runHeadlessSmokeTest() (result error) {
 		packageReference,
 		runtimeEnvironment.Workspace,
 		runtimeEnvironment.Environment,
+		plan.port,
 		output,
 	)
 	if err != nil {
@@ -82,6 +92,6 @@ func runHeadlessSmokeTest() (result error) {
 		return fmt.Errorf("DSH did not become ready: %w", err)
 	}
 	output.Flush()
-	logger.Printf("[smoke] DSH ready at %s", metadata.DSHURL)
+	logger.Printf("[smoke] DSH ready at %s", supervisor.URL())
 	return nil
 }

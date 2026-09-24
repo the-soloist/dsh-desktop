@@ -64,12 +64,13 @@ func Resolve(base []string) (Runtime, error) {
 	if err != nil {
 		return result, fmt.Errorf("%w: %v", ErrWorkspace, err)
 	}
+	environment = expandLaunchEnvironmentPaths(environment)
 
 	result.Environment = environment
-	result.Runner = runner
-	result.NodePath = nodePath
-	result.DSHHome = dshHome
-	result.Workspace = workspace
+	result.Runner = PackageRunner{Name: runner.Name, Path: expandLaunchPath(runner.Path)}
+	result.NodePath = expandLaunchPath(nodePath)
+	result.DSHHome = expandLaunchPath(dshHome)
+	result.Workspace = expandLaunchPath(workspace)
 	result.RegistryURL = npmRegistryURL(environment)
 	return result, nil
 }

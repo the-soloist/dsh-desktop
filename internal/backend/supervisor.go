@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -104,6 +105,7 @@ func (supervisor *Supervisor) Start(
 	packageReference string,
 	workspace string,
 	environment []string,
+	port int,
 	output io.Writer,
 ) (*Process, error) {
 	supervisor.mu.Lock()
@@ -114,8 +116,11 @@ func (supervisor *Supervisor) Start(
 	if supervisor.active != nil && !supervisor.active.exited() {
 		return nil, errors.New("a managed DSH process is already running")
 	}
+	if port < 1 || port > 65535 {
+		return nil, fmt.Errorf("invalid DSH port %d", port)
+	}
 
-	command := newPackageRunnerCommand(ctx, runnerPath, packageReference, "web", "--no-open")
+	command := newPackageRunnerCommand(ctx, runnerPath, packageReference, "web", "--no-open", "--port", strconv.Itoa(port))
 	command.Dir = workspace
 	command.Env = environment
 	command.Stdout = output
@@ -266,10 +271,24 @@ func waitForExit(done <-chan struct{}, timeout time.Duration) bool {
 	}
 }
 
+// SetURL changes the loopback address used by readiness probes.
+func (supervisor *Supervisor) SetURL(rawURL string) {
+	supervisor.mu.Lock()
+	defer supervisor.mu.Unlock()
+	supervisor.config.URL = rawURL
+}
+
+// URL returns the loopback address used by readiness probes.
+func (supervisor *Supervisor) URL() string {
+	supervisor.mu.Lock()
+	defer supervisor.mu.Unlock()
+	return supervisor.config.URL
+}
+
 // Probe identifies whether the configured address is unavailable, is DSH, or
 // belongs to an unexpected HTTP service.
 func (supervisor *Supervisor) Probe(ctx context.Context) ProbeStatus {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, supervisor.config.URL, nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, supervisor.URL(), nil)
 	if err != nil {
 		return ProbeUnexpected
 	}
@@ -334,7 +353,7 @@ func (supervisor *Supervisor) waitForReady(
 		case ProbeUnexpected:
 			readySince = time.Time{}
 			if process == nil {
-				return fmt.Errorf("%s 已被非 DSH 服务占用", supervisor.config.URL)
+				return fmt.Errorf("%s 已被非 DSH 服务占用", supervisor.URL())
 			}
 		default:
 			readySince = time.Time{}

@@ -21,6 +21,8 @@ type controller struct {
 	window               *windowManager
 	backend              *backend.Supervisor
 	metadata             dshdesktop.Metadata
+	serviceContext       context.Context
+	cancelService        context.CancelFunc
 	logger               *log.Logger
 	startup              *startupTimeline
 	service              serviceLifecycle
@@ -56,6 +58,7 @@ func newController(
 	logger *log.Logger,
 	startupConsoleOwned bool,
 ) *controller {
+	serviceContext, cancelService := context.WithCancel(context.Background())
 	updateClient, updateErr := releaseupdate.NewClient(releaseupdate.DefaultRepository, "", nil)
 	if updateErr != nil {
 		logger.Printf("[update] cannot configure GitHub Releases client: %v", updateErr)
@@ -73,6 +76,8 @@ func newController(
 		window:              window,
 		backend:             supervisor,
 		metadata:            metadata,
+		serviceContext:      serviceContext,
+		cancelService:       cancelService,
 		logger:              logger,
 		startup:             newStartupTimeline("正在准备", "即将启动本地 DSH 服务…"),
 		startupConsoleOwned: startupConsoleOwned,
@@ -131,9 +136,9 @@ func (controller *controller) bindTray() {
 	menu.Add("重启 DSH").OnClick(func(*application.Context) { controller.requestRestart() })
 	menu.Add("检查更新").OnClick(func(*application.Context) { controller.requestUpdateCheck() })
 	menu.Add("关闭窗口").OnClick(func(*application.Context) { controller.window.close() })
-	menu.Add("完全退出").OnClick(func(*application.Context) { controller.quit() })
 	menu.AddSeparator()
 	menu.Add("关于").OnClick(func(*application.Context) { controller.app.Menu.ShowAbout() })
+	menu.Add("退出").OnClick(func(*application.Context) { controller.quit() })
 	tray := controller.app.SystemTray.New()
 	tray.SetIcon(appicon.PNG)
 	tray.SetTooltip(controller.metadata.DisplayName)
@@ -193,6 +198,7 @@ func (controller *controller) quit() {
 	if !controller.quitting.CompareAndSwap(false, true) {
 		return
 	}
+	controller.cancelService()
 	controller.service.set(serviceQuitting)
 	controller.window.save()
 	controller.logger.Printf("[app] complete exit requested")
@@ -203,6 +209,7 @@ func (controller *controller) quit() {
 
 func (controller *controller) shutdown() {
 	controller.quitting.Store(true)
+	controller.cancelService()
 	controller.stopUpdateChecks()
 	controller.closeAuthenticationProxy()
 	controller.service.set(serviceQuitting)

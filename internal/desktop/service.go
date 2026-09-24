@@ -26,11 +26,7 @@ func (controller *controller) startService(restart bool) {
 }
 
 func (controller *controller) runServiceAction(restart bool) {
-	if restart {
-		if !controller.prepareRestart() {
-			return
-		}
-	} else if !controller.prepareInitialStart() {
+	if !controller.prepareService(restart) {
 		return
 	}
 	if controller.quitting.Load() {
@@ -82,7 +78,7 @@ func (controller *controller) runServiceAction(restart bool) {
 		controller.showStartupFailure("npm registry 配置无效。", err)
 		return
 	}
-	versionContext, cancelVersionLookup := context.WithTimeout(context.Background(), 15*time.Second)
+	versionContext, cancelVersionLookup := context.WithTimeout(controller.serviceContext, 15*time.Second)
 	latestVersion, err := registryClient.LatestVersion(versionContext, controller.metadata.DSHPackage)
 	cancelVersionLookup()
 	if err != nil {
@@ -102,64 +98,20 @@ func (controller *controller) runServiceAction(restart bool) {
 	)
 }
 
-func (controller *controller) prepareRestart() bool {
-	controller.logger.Printf("[dsh] restart requested")
-	if controller.backend.HasManagedProcess() {
-		if err := controller.backend.StopCurrent(); err != nil {
-			controller.showStartupFailure("无法停止现有 DSH 进程。", err)
-			return false
-		}
-		return true
-	}
-	switch controller.backend.Probe(context.Background()) {
-	case backend.ProbeReady:
-		message := fmt.Sprintf("当前 DSH 服务由外部进程启动，%s 不会终止它。", controller.metadata.DisplayName)
-		showPlatformWarning(controller.metadata.DisplayName, message)
-		controller.service.set(serviceReady)
-		controller.window.window.SetURL(controller.metadata.DSHURL)
-		controller.window.show()
-		return false
-	case backend.ProbeAuthenticationRequired:
-		controller.showStartupFailure("检测到由外部进程启动且需要认证的 DSH。请先退出该进程，然后重试。", nil)
-		return false
-	case backend.ProbeUnexpected:
-		controller.showStartupFailure(controller.metadata.DSHURL+" 已被其他程序占用。", nil)
-		return false
-	default:
-		return true
-	}
-}
-
-func (controller *controller) prepareInitialStart() bool {
-	controller.setStartupStatus("正在检查本地服务", "正在检测 "+controller.metadata.DSHURL+"…", false)
-	switch controller.backend.Probe(context.Background()) {
-	case backend.ProbeUnexpected:
-		controller.showStartupFailure(controller.metadata.DSHURL+" 已被其他程序占用，检测到的页面不是 DSH。", nil)
-		return false
-	case backend.ProbeReady:
-		controller.setStartupStatus("正在连接 DSH", "检测到已有服务，正在确认其稳定性…", false)
-		stableWait := readinessStability + 2*readinessInterval
-		if err := controller.backend.WaitForReady(context.Background(), nil, stableWait); err == nil {
-			controller.logger.Printf("[dsh] reusing service at %s", controller.metadata.DSHURL)
-			controller.showDSH("正在加载现有 DSH 服务…", nil)
-			return false
-		}
-		controller.logger.Printf("[dsh] existing service disappeared during readiness check")
-	case backend.ProbeAuthenticationRequired:
-		controller.showStartupFailure("检测到已运行的 DSH，但它需要启动时生成的认证地址。请先退出该 DSH 进程，然后重试。", nil)
-		return false
-	}
-	return true
-}
-
 func (controller *controller) launchDSH(runner dshenv.PackageRunner, packageReference, workspace string, environment []string) {
-	command := dshLaunchCommand(runner.Name, packageReference)
+	address := controller.backend.URL()
+	port, err := portFromURL(address)
+	if err != nil {
+		controller.showStartupFailure("无法解析 DSH 端口。", err)
+		return
+	}
+	command := dshLaunchCommand(runner.Name, packageReference, port)
 	controller.setStartupCommand("正在启动 DSH", command)
 	controller.logger.Printf("[dsh] working directory: %s", workspace)
 	summaryLines := make(chan string, 32)
 	webURLs := make(chan string, 1)
 	output := newStartupOutputRecorder(controller.logger, func(line string) {
-		if webURL, ok := dshWebURL(line, controller.metadata.DSHURL); ok {
+		if webURL, ok := dshWebURL(line, address); ok && hasDSHAuthenticationToken(webURL) {
 			select {
 			case webURLs <- webURL:
 			default:
@@ -170,7 +122,7 @@ func (controller *controller) launchDSH(runner dshenv.PackageRunner, packageRefe
 		default:
 		}
 	})
-	process, err := controller.backend.Start(context.Background(), runner.Path, packageReference, workspace, environment, output)
+	process, err := controller.backend.Start(context.Background(), runner.Path, packageReference, workspace, environment, port, output)
 	if err != nil {
 		if controller.quitting.Load() || errors.Is(err, backend.ErrClosed) {
 			return
@@ -186,7 +138,7 @@ func (controller *controller) launchDSH(runner dshenv.PackageRunner, packageRefe
 	controller.setStartupStatus("正在等待 DSH", "DSH 进程已启动，正在等待服务和插件完成初始化…", false)
 	summaryDone := make(chan struct{})
 	go controller.consumeOutputSummary(process, summaryLines, summaryDone)
-	waitErr := controller.backend.WaitForReady(context.Background(), process, startTimeout())
+	waitErr := controller.backend.WaitForReady(controller.serviceContext, process, startTimeout())
 	output.Flush()
 	close(summaryDone)
 	if waitErr != nil {
@@ -206,12 +158,17 @@ func (controller *controller) launchDSH(runner dshenv.PackageRunner, packageRefe
 		controller.stopProcess(process)
 		return
 	}
-	navigationURL := controller.metadata.DSHURL
-	select {
-	case navigationURL = <-webURLs:
-	default:
+	navigationURL := address
+	if url, ok := pendingDSHWebURL(webURLs); ok {
+		navigationURL = url
 	}
 	probeStatus := controller.backend.Probe(context.Background())
+	if probeStatus == backend.ProbeAuthenticationRequired && !hasDSHAuthenticationToken(navigationURL) {
+		controller.setStartupStatus("正在等待认证地址", "DSH 已要求认证，正在等待 dsh web 输出认证地址…", false)
+		if url, ok := waitForDSHWebURL(webURLs, process.Done(), authenticationURLWait); ok {
+			navigationURL = url
+		}
+	}
 	if probeStatus == backend.ProbeAuthenticationRequired && !hasDSHAuthenticationToken(navigationURL) {
 		waitErr = errors.New("DSH 已要求认证，但启动输出中没有可用的认证地址")
 		if stopErr := controller.backend.StopIfCurrent(process); stopErr != nil {
@@ -223,8 +180,8 @@ func (controller *controller) launchDSH(runner dshenv.PackageRunner, packageRefe
 	var authenticationCookie *http.Cookie
 	if probeStatus == backend.ProbeAuthenticationRequired {
 		controller.setStartupStatus("正在获取认证 Cookie", "正在通过本地网络请求交换 dsh web 输出的 /?token=xxx…，成功后将注入 WebView Cookie。", false)
-		cookieContext, cancelCookieExchange := context.WithTimeout(context.Background(), 15*time.Second)
-		authenticationCookie, waitErr = exchangeDSHAuthenticationCookie(cookieContext, navigationURL, controller.metadata.DSHURL)
+		cookieContext, cancelCookieExchange := context.WithTimeout(controller.serviceContext, 15*time.Second)
+		authenticationCookie, waitErr = exchangeDSHAuthenticationCookie(cookieContext, navigationURL, address)
 		cancelCookieExchange()
 		if waitErr != nil {
 			if stopErr := controller.backend.StopIfCurrent(process); stopErr != nil {
@@ -239,8 +196,38 @@ func (controller *controller) launchDSH(runner dshenv.PackageRunner, packageRefe
 	controller.showDSH("服务已就绪，正在建立 WebView 会话…", authenticationCookie)
 }
 
-func dshLaunchCommand(runnerName, packageReference string) string {
-	return fmt.Sprintf("%s %s web --no-open", runnerName, packageReference)
+func dshLaunchCommand(runnerName, packageReference string, port int) string {
+	return fmt.Sprintf("%s %s web --no-open --port %d", runnerName, packageReference, port)
+}
+
+const authenticationURLWait = 15 * time.Second
+
+func pendingDSHWebURL(urls <-chan string) (string, bool) {
+	select {
+	case url := <-urls:
+		if hasDSHAuthenticationToken(url) {
+			return url, true
+		}
+	default:
+	}
+	return "", false
+}
+
+func waitForDSHWebURL(urls <-chan string, done <-chan struct{}, timeout time.Duration) (string, bool) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case url := <-urls:
+			if hasDSHAuthenticationToken(url) {
+				return url, true
+			}
+		case <-done:
+			return pendingDSHWebURL(urls)
+		case <-timer.C:
+			return pendingDSHWebURL(urls)
+		}
+	}
 }
 
 func (controller *controller) consumeOutputSummary(process *backend.Process, lines <-chan string, done <-chan struct{}) {
@@ -322,7 +309,7 @@ func (controller *controller) showStartupFailure(summary string, failure error) 
 
 func (controller *controller) showDSH(message string, authenticationCookie *http.Cookie) {
 	controller.service.set(serviceReady)
-	controller.logger.Printf("[dsh] ready: %s", controller.metadata.DSHURL)
+	controller.logger.Printf("[dsh] ready: %s", controller.backend.URL())
 	authenticationRequired := authenticationCookie != nil
 	if authenticationRequired {
 		message = "服务已就绪，正在建立 WebView 会话…"
@@ -354,15 +341,15 @@ func (controller *controller) navigateToDSH() {
 			return
 		}
 		controller.closeAuthenticationProxy()
-		controller.logger.Printf("[dsh] opening DSH URL: %s", controller.metadata.DSHURL)
-		controller.window.window.SetURL(controller.metadata.DSHURL)
+		controller.logger.Printf("[dsh] opening DSH URL: %s", controller.backend.URL())
+		controller.window.window.SetURL(controller.backend.URL())
 		controller.window.show()
 		controller.scheduleSmokeSuccess()
 		return
 	}
 
 	controller.setStartupStatus("正在注入 WebView Cookie", "正在把网络请求获得的认证 Cookie 注入 WebView 请求…", false)
-	proxy, err := newDSHAuthenticationProxy(controller.metadata.DSHURL, authenticationCookie)
+	proxy, err := newDSHAuthenticationProxy(controller.backend.URL(), authenticationCookie)
 	if err != nil {
 		controller.showStartupFailure("无法建立 DSH WebView 会话。", err)
 		return

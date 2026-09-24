@@ -136,6 +136,34 @@ func TestDSHWebURLAcceptsOnlyConfiguredOrigin(t *testing.T) {
 	}
 }
 
+func TestWaitForDSHWebURLAcceptsLateToken(t *testing.T) {
+	urls := make(chan string, 1)
+	const want = "http://127.0.0.1:3080/?token=secret"
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		urls <- "http://127.0.0.1:3080/"
+		urls <- want
+	}()
+	got, ok := waitForDSHWebURL(urls, nil, time.Second)
+	if !ok || got != want {
+		t.Fatalf("waitForDSHWebURL() = %q, %v", got, ok)
+	}
+}
+
+func TestWaitForDSHWebURLStopsWhenProcessExits(t *testing.T) {
+	urls := make(chan string, 1)
+	done := make(chan struct{})
+	close(done)
+	if _, ok := waitForDSHWebURL(urls, done, time.Second); ok {
+		t.Fatal("waitForDSHWebURL() accepted a missing URL after process exit")
+	}
+	urls <- "http://127.0.0.1:3080/?token=secret"
+	got, ok := waitForDSHWebURL(urls, done, time.Second)
+	if !ok || got != "http://127.0.0.1:3080/?token=secret" {
+		t.Fatalf("waitForDSHWebURL() = %q, %v", got, ok)
+	}
+}
+
 func TestDSHOutputSummary(t *testing.T) {
 	for _, line := range []string{"Resolving dependencies", "Resolved, downloaded and extracted [2]", "dsh web: http://127.0.0.1:3080"} {
 		if _, _, _, ok := dshOutputSummary(line); !ok {
@@ -174,8 +202,8 @@ func TestHeadlessSmokeTestEnabledUsesEnvironment(t *testing.T) {
 }
 
 func TestDSHLaunchCommandIncludesExactVersion(t *testing.T) {
-	got := dshLaunchCommand("bunx", "@deepseek-ai/dsh@0.1.2-rc.1")
-	want := "bunx @deepseek-ai/dsh@0.1.2-rc.1 web --no-open"
+	got := dshLaunchCommand("bunx", "@deepseek-ai/dsh@0.1.2-rc.1", 3080)
+	want := "bunx @deepseek-ai/dsh@0.1.2-rc.1 web --no-open --port 3080"
 	if got != want {
 		t.Fatalf("dshLaunchCommand() = %q, want %q", got, want)
 	}

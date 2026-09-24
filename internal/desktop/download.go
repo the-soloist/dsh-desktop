@@ -125,7 +125,7 @@ func (controller *controller) validateDownloadRequest(window application.Window,
 	controller.proxyMu.Lock()
 	proxy := controller.authenticationProxy
 	controller.proxyMu.Unlock()
-	expectedOrigin := controller.metadata.DSHURL
+	expectedOrigin := controller.backend.URL()
 	if proxy != nil {
 		expectedOrigin = proxy.URL()
 	}
