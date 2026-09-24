@@ -131,11 +131,9 @@ func (controller *controller) bind() {
 
 func (controller *controller) bindTray() {
 	menu := controller.app.NewMenu()
-	menu.Add("显示主窗口").OnClick(func(*application.Context) { controller.window.show() })
 	menu.Add("强制刷新").OnClick(func(*application.Context) { controller.window.forceReload() })
-	menu.Add("重启 DSH").OnClick(func(*application.Context) { controller.requestRestart() })
+	menu.Add("重启DSH").OnClick(func(*application.Context) { controller.requestRestart() })
 	menu.Add("检查更新").OnClick(func(*application.Context) { controller.requestUpdateCheck() })
-	menu.Add("关闭窗口").OnClick(func(*application.Context) { controller.window.close() })
 	menu.AddSeparator()
 	menu.Add("关于").OnClick(func(*application.Context) { controller.app.Menu.ShowAbout() })
 	menu.Add("退出").OnClick(func(*application.Context) { controller.quit() })
