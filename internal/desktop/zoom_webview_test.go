@@ -42,7 +42,7 @@ func TestPageZoomWebView(t *testing.T) {
 	command.Env = append(os.Environ(), "DSH_ZOOM_TEST_CHILD=1")
 	output, err := command.CombinedOutput()
 	t.Log(string(output))
-	if err != nil || !strings.Contains(string(output), "PASS native zoom, shortcuts, bounds, navigation, auto-hide") {
+	if err != nil || !strings.Contains(string(output), "PASS native zoom, shortcuts, bounds, navigation, auto-hide, independent magnification") {
 		t.Fatalf("native WebView zoom: %v", err)
 	}
 }
@@ -91,7 +91,7 @@ func runZoomWebViewTest() error {
 	window.OnWindowEvent(events.Mac.WebViewDidFinishNavigation, func(*application.WindowEvent) { loaded <- struct{}{} })
 	result := make(chan error, 1)
 	go func() {
-		err := checkZoomWebView(window, app, samples, loaded)
+		err := checkZoomWebView(window, app, zoom, samples, loaded)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1) // NSApplication termination can exit without returning from App.Run.
@@ -105,7 +105,7 @@ func runZoomWebViewTest() error {
 	return <-result
 }
 
-func checkZoomWebView(window *application.WebviewWindow, app *application.App, samples <-chan zoomMetrics, loaded <-chan struct{}) error {
+func checkZoomWebView(window *application.WebviewWindow, app *application.App, zoom *pageZoom, samples <-chan zoomMetrics, loaded <-chan struct{}) error {
 	if shortcut := app.Menu.GetApplicationMenu().FindByRole(application.ResetZoom).GetAccelerator(); shortcut != "" {
 		return fmt.Errorf("reset shortcut still installed: %s", shortcut)
 	}
@@ -117,12 +117,14 @@ func checkZoomWebView(window *application.WebviewWindow, app *application.App, s
           const badge = document.getElementById('dsh-desktop-zoom');
           const label = badge.shadowRoot.querySelector('span');
           const rect = label.getBoundingClientRect();
+          const viewport = visualViewport;
           window.webkit.messageHandlers.external.postMessage(JSON.stringify({
             width: innerWidth, height: innerHeight, bodyWidth: document.body.getBoundingClientRect().width,
             appHeight: document.getElementById('app').getBoundingClientRect().height,
             footerBottom: document.querySelector('footer').getBoundingClientRect().bottom,
             scale: visualViewport.scale, narrow: matchMedia('(max-width: 600px)').matches,
-            badgeRight: innerWidth - rect.right, badgeBottom: innerHeight - rect.bottom,
+            badgeRight: viewport.offsetLeft + viewport.width - rect.right,
+            badgeBottom: viewport.offsetTop + viewport.height - rect.bottom,
             badgeWidth: rect.width, opacity: Number(getComputedStyle(label).opacity),
             label: label.textContent, visible: badge.hasAttribute('data-visible')
           }));
@@ -171,7 +173,11 @@ func checkZoomWebView(window *application.WebviewWindow, app *application.App, s
 		return err
 	}
 	time.Sleep(2100 * time.Millisecond)
-	if got := sample(); got.Visible || got.Opacity != 0 {
+	got := sample()
+	for attempt := 0; attempt < 5 && (got.Visible || got.Opacity != 0); attempt++ {
+		got = sample()
+	}
+	if got.Visible || got.Opacity != 0 {
 		return fmt.Errorf("indicator did not auto-hide: %+v", got)
 	}
 	for _, navigate := range []func(){func() { window.SetURL("/next") }, window.Reload} {
@@ -185,6 +191,55 @@ func checkZoomWebView(window *application.WebviewWindow, app *application.App, s
 			return fmt.Errorf("navigation should restore zoom without showing the indicator")
 		}
 	}
-	fmt.Println(strings.Repeat("-", 32), "PASS native zoom, shortcuts, bounds, navigation, auto-hide")
+	// Exercise the native viewport magnification used by trackpad gestures.
+	// Wails' macOS SetZoom maps to WKWebView.magnification, not pageZoom.
+	if !testNativeMagnificationEnabled(window) {
+		return fmt.Errorf("trackpad magnification is disabled")
+	}
+	zoom.change(0)
+	window.SetZoom(1.5)
+	checkIndependent := func(percent int, magnification float64) error {
+		got := sample()
+		factor := float64(percent) / 100
+		if !testNativeMagnificationEnabled(window) || math.Abs(window.GetZoom()-magnification) > .01 ||
+			math.Abs(got.Scale-magnification) > .01 || math.Abs(got.Width-baseline.Width/factor/magnification) > 2 ||
+			math.Abs(got.Height-baseline.Height/factor/magnification) > 2 ||
+			math.Abs(got.BodyWidth-baseline.BodyWidth/factor) > 2 || math.Abs(got.AppHeight-baseline.AppHeight/factor) > 2 ||
+			math.Abs(got.FooterBottom-baseline.FooterBottom/factor) > 2 ||
+			got.Label != fmt.Sprintf("%d%%", percent) {
+			return fmt.Errorf("layout %d%% and magnification %.2f interfered: %+v", percent, magnification, got)
+		}
+		physicalScale := factor * magnification
+		if got.Visible && (math.Abs(got.BadgeRight*physicalScale-12) > 2 || math.Abs(got.BadgeBottom*physicalScale-12) > 2 ||
+			math.Abs(got.BadgeWidth*physicalScale-baseline.BadgeWidth) > 2) {
+			return fmt.Errorf("indicator moved out of the magnified viewport: %+v", got)
+		}
+		return nil
+	}
+	if err := checkIndependent(100, 1.5); err != nil {
+		return err
+	}
+	for _, step := range []struct {
+		key     string
+		percent int
+	}{
+		{"Ctrl+plus", 110}, {"Cmd+=", 120},
+		{"Ctrl+-", 110}, {"Cmd+-", 100},
+	} {
+		window.HandleKeyEvent(step.key)
+		if err := checkIndependent(step.percent, 1.5); err != nil {
+			return fmt.Errorf("%s: %w", step.key, err)
+		}
+	}
+	window.SetZoom(2)
+	zoom.restore()
+	if err := checkIndependent(100, 2); err != nil {
+		return err
+	}
+	window.SetZoom(1)
+	if err := check(100, sample()); err != nil {
+		return err
+	}
+	fmt.Println(strings.Repeat("-", 32), "PASS native zoom, shortcuts, bounds, navigation, auto-hide, independent magnification")
 	return nil
 }

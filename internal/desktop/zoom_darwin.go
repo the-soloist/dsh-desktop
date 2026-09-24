@@ -20,10 +20,9 @@ static WKWebView *dshFindWebView(NSView *view) {
 static bool dshSetPageZoom(void *window, double factor) {
     WKWebView *webview = dshFindWebView([(NSWindow *)window contentView]);
     if (!webview) return false;
-    // Wails beta.16 uses magnification, which scales the viewport without
-    // reflowing 100vh/fixed elements. Use WebKit's layout zoom instead.
-    webview.allowsMagnification = NO;
-    webview.magnification = 1.0;
+    // Trackpad gestures own viewport magnification; keyboard shortcuts own
+    // layout zoom. Changing element sizes must not reset the user's pinch.
+    webview.allowsMagnification = YES;
     webview.pageZoom = factor;
     return true;
 }
@@ -43,7 +42,7 @@ func setNativePageZoom(window *application.WebviewWindow, factor float64) bool {
 
 func bindNativeZoomMenu(app *application.App, zoom *pageZoom) {
 	// App-menu accelerators take precedence over window key bindings on macOS.
-	// Replace their callbacks too, so the old magnification path is never used.
+	// Keep menu/keyboard zoom on pageZoom, independently of trackpad magnification.
 	menu := application.DefaultApplicationMenu()
 	for role, direction := range map[application.Role]int{
 		application.ZoomIn: 1, application.ZoomOut: -1, application.ResetZoom: 0,

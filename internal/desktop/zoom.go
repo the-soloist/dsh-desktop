@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"fmt"
 	"log"
+	"runtime"
 	"sync"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -41,14 +42,25 @@ func (zoom *pageZoom) bind(app *application.App, window *application.WebviewWind
 }
 
 func (zoom *pageZoom) keyBindings() map[string]func(application.Window) {
+	return zoom.keyBindingsForOS(runtime.GOOS)
+}
+
+func (zoom *pageZoom) keyBindingsForOS(goos string) map[string]func(application.Window) {
 	in := func(application.Window) { zoom.change(1) }
-	return map[string]func(application.Window){
-		"CmdOrCtrl+=":          in,
-		"CmdOrCtrl+plus":       in,
-		"CmdOrCtrl+Shift+=":    in,
-		"CmdOrCtrl+Shift+plus": in,
-		"CmdOrCtrl+-":          func(application.Window) { zoom.change(-1) },
+	out := func(application.Window) { zoom.change(-1) }
+	modifiers := []string{"CmdOrCtrl"}
+	if goos == "darwin" {
+		// CmdOrCtrl means Command on macOS. Also accept literal Control there.
+		modifiers = append(modifiers, "Ctrl")
 	}
+	bindings := make(map[string]func(application.Window))
+	for _, modifier := range modifiers {
+		for _, key := range []string{"=", "plus"} {
+			bindings[modifier+"+"+key] = in
+		}
+		bindings[modifier+"+-"] = out
+	}
+	return bindings
 }
 
 func nextPageZoom(current, direction, minimum int) int {

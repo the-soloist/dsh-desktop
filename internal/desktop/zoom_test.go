@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -31,17 +32,17 @@ func TestPageZoomShortcutsAndNavigationRestore(t *testing.T) {
 		return true
 	}}
 	bindings := zoom.keyBindings()
-	for _, key := range []string{"CmdOrCtrl+=", "CmdOrCtrl+plus", "CmdOrCtrl+Shift+=", "CmdOrCtrl+Shift+plus", "CmdOrCtrl+-"} {
+	for _, key := range []string{"CmdOrCtrl+=", "CmdOrCtrl+plus", "CmdOrCtrl+-"} {
 		bindings[key](nil)
 	}
-	zoom.restore() // Navigation must keep 130%, not silently return to 100%.
+	zoom.restore() // Navigation must keep 110%, not silently return to 100%.
 	if _, exists := bindings["CmdOrCtrl+0"]; exists {
 		t.Fatal("zoom reset shortcut must not be registered")
 	}
-	if want := []int{110, 120, 130, 140, 130, 130}; !reflect.DeepEqual(applied, want) {
+	if want := []int{110, 120, 110, 110}; !reflect.DeepEqual(applied, want) {
 		t.Fatalf("applied = %v, want %v", applied, want)
 	}
-	if want := []bool{true, true, true, true, true, false}; !reflect.DeepEqual(shown, want) {
+	if want := []bool{true, true, true, false}; !reflect.DeepEqual(shown, want) {
 		t.Fatalf("indicator visibility = %v, want %v", shown, want)
 	}
 }
@@ -51,6 +52,41 @@ func TestPageZoomDoesNotAdvanceWhenNativeViewUnavailable(t *testing.T) {
 	zoom.change(1)
 	if zoom.percent != 100 {
 		t.Fatalf("level advanced without applying zoom: %d", zoom.percent)
+	}
+}
+
+func TestPageZoomControlAliasesOnMac(t *testing.T) {
+	var applied []int
+	zoom := &pageZoom{percent: 100, apply: func(percent int, _ bool) bool {
+		applied = append(applied, percent)
+		return true
+	}}
+	bindings := zoom.keyBindingsForOS("darwin")
+	for _, key := range []string{"Ctrl+=", "Ctrl+plus", "Ctrl+-"} {
+		if bindings[key] == nil {
+			t.Fatalf("missing shortcut %s", key)
+		}
+		bindings[key](nil)
+	}
+	bindings["CmdOrCtrl+-"](nil) // Both modifiers must operate on the same layout level.
+	if want := []int{110, 120, 110, 100}; !reflect.DeepEqual(applied, want) {
+		t.Fatalf("applied = %v, want %v", applied, want)
+	}
+	for _, goos := range []string{"windows", "linux"} {
+		if _, exists := zoom.keyBindingsForOS(goos)["Ctrl+="]; exists {
+			t.Fatalf("duplicate Control alias on %s", goos)
+		}
+	}
+}
+
+func TestPageZoomDoesNotBindShiftCombinations(t *testing.T) {
+	zoom := &pageZoom{}
+	for _, goos := range []string{"darwin", "windows", "linux"} {
+		for key := range zoom.keyBindingsForOS(goos) {
+			if strings.Contains(key, "Shift") {
+				t.Fatalf("unexpected Shift shortcut on %s: %s", goos, key)
+			}
+		}
 	}
 }
 

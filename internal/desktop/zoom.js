@@ -24,12 +24,23 @@ function (percent, show) {
       </style>
       <span role="status" aria-live="polite" aria-atomic="true"></span>`;
     document.documentElement.append(host);
+    // Pinch zoom can move/resize the visible viewport without changing layout.
+    host.positionBadge = () => {
+      const viewport = window.visualViewport;
+      const scale = host.pageZoom * (viewport?.scale ?? 1);
+      const right = document.documentElement.clientWidth - (viewport?.offsetLeft ?? 0) - (viewport?.width ?? innerWidth);
+      const bottom = document.documentElement.clientHeight - (viewport?.offsetTop ?? 0) - (viewport?.height ?? innerHeight);
+      host.style.cssText = `all: initial !important; position: fixed !important;
+        right: ${right + 12 / scale}px !important; bottom: ${bottom + 12 / scale}px !important;
+        z-index: 2147483647 !important; pointer-events: none !important;
+        transform: scale(${1 / scale}) !important; transform-origin: bottom right !important;`;
+    };
+    window.visualViewport?.addEventListener("resize", host.positionBadge);
+    window.visualViewport?.addEventListener("scroll", host.positionBadge);
   }
-  // Keep the badge's physical size/inset steady as the document zoom changes.
-  host.style.cssText = `all: initial !important; position: fixed !important;
-    bottom: ${12 * 100 / percent}px !important; right: ${12 * 100 / percent}px !important;
-    z-index: 2147483647 !important; pointer-events: none !important;
-    transform: scale(${100 / percent}) !important; transform-origin: bottom right !important;`;
+  // Keep the badge's physical size/inset steady under both types of zoom.
+  host.pageZoom = percent / 100;
+  host.positionBadge();
   const label = host.shadowRoot.querySelector("span");
   label.textContent = `${percent}%`;
   label.setAttribute("aria-label", `页面缩放 ${percent}%`);
