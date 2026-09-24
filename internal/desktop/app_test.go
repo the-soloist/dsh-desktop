@@ -114,12 +114,25 @@ func TestStartupOutputRedactsTokenAndSummarisesPeerWarnings(t *testing.T) {
 
 func TestDSHWebURLAcceptsOnlyConfiguredOrigin(t *testing.T) {
 	const expected = "http://127.0.0.1:3080"
-	got, ok := dshWebURL("dsh web: http://127.0.0.1:3080/?token=secret", expected)
-	if !ok || got != "http://127.0.0.1:3080/?token=secret" || !hasDSHAuthenticationToken(got) {
+	const output = "INFO:ida_pro_mcp.idalib_supervisor:Spawning idalib worker on 127.0.0.1:12521\n" +
+		"dsh web: http://127.0.0.1:3080/?token=1ih2JZ1Cdp2jr4Je6-jdOdRETkyFWLOvB6i1_wogcxw\n"
+	if _, ok := dshWebURL("INFO:ida_pro_mcp.idalib_supervisor:Spawning idalib worker on 127.0.0.1:12521", expected); ok {
+		t.Fatal("dshWebURL() accepted an INFO log")
+	}
+	got, ok := dshWebURL(output, expected)
+	const want = "http://127.0.0.1:3080/?token=1ih2JZ1Cdp2jr4Je6-jdOdRETkyFWLOvB6i1_wogcxw"
+	if !ok || got != want || !hasDSHAuthenticationToken(got) {
 		t.Fatalf("dshWebURL() = %q, %v", got, ok)
+	}
+	got, ok = dshWebURL("INFO:loader: dsh web: "+want, expected)
+	if !ok || got != want {
+		t.Fatalf("prefixed dshWebURL() = %q, %v", got, ok)
 	}
 	if _, ok = dshWebURL("dsh web: https://example.com/?token=secret", expected); ok {
 		t.Fatal("dshWebURL() accepted an unexpected origin")
+	}
+	if _, ok = dshWebURL("dsh web: opening the default browser; pass --no-open to disable", expected); ok {
+		t.Fatal("dshWebURL() accepted a non-URL dsh web line")
 	}
 }
 

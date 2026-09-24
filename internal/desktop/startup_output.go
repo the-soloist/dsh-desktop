@@ -10,7 +10,11 @@ import (
 
 const startupOutputHistoryLimit = 12
 
-var authenticationTokenPattern = regexp.MustCompile(`(?i)([?&]token=)[^&\s]+`)
+var (
+	authenticationTokenPattern = regexp.MustCompile(`(?i)([?&]token=)[^&\s]+`)
+	ansiEscapePattern          = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+	dshWebURLPattern           = regexp.MustCompile(`(?i)(?:^|[\r\n])[^\r\n]*?dsh web:\s+(https?://\S+)`)
+)
 
 type startupOutputRecorder struct {
 	logger                 *log.Logger
@@ -107,25 +111,25 @@ func redactSensitiveOutput(value string) string {
 	return authenticationTokenPattern.ReplaceAllString(value, "${1}<redacted>")
 }
 
+// dshWebURL extracts the URL from a "dsh web: <url>" line. Startup logs may
+// include unrelated INFO lines, including other loopback addresses, so only
+// that marker is accepted.
 func dshWebURL(line, expectedURL string) (string, bool) {
-	const marker = "dsh web:"
-	markerIndex := strings.Index(strings.ToLower(line), marker)
-	if markerIndex < 0 {
+	cleaned := ansiEscapePattern.ReplaceAllString(strings.ReplaceAll(line, "\r\n", "\n"), "")
+	match := dshWebURLPattern.FindStringSubmatch("\n" + cleaned)
+	if match == nil {
 		return "", false
 	}
-	fields := strings.Fields(strings.TrimSpace(line[markerIndex+len(marker):]))
-	if len(fields) == 0 {
-		return "", false
-	}
-	candidate, err := url.Parse(fields[0])
-	if err != nil || candidate.User != nil {
+	raw := strings.TrimRight(match[1], ".,;)]}>\"'")
+	candidate, err := url.Parse(raw)
+	if err != nil || candidate.User != nil || candidate.Host == "" {
 		return "", false
 	}
 	expected, err := url.Parse(expectedURL)
 	if err != nil || !strings.EqualFold(candidate.Scheme, expected.Scheme) || !strings.EqualFold(candidate.Host, expected.Host) {
 		return "", false
 	}
-	return candidate.String(), true
+	return raw, true
 }
 
 func hasDSHAuthenticationToken(value string) bool {
