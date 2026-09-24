@@ -16,6 +16,7 @@ type windowManager struct {
 	window *application.WebviewWindow
 	store  *windowstate.Store
 	logger *log.Logger
+	zoom   *pageZoom
 }
 
 func newWindowManager(app *application.App, store *windowstate.Store, title string, logger *log.Logger) *windowManager {
@@ -41,14 +42,17 @@ func newWindowManager(app *application.App, store *windowstate.Store, title stri
 		options.StartState = application.WindowStateMaximised
 	}
 	manager := &windowManager{app: app, window: app.Window.NewWithOptions(options), store: store, logger: logger}
+	manager.zoom = newPageZoom(manager.window, logger)
+	manager.zoom.bind(app, manager.window)
 	manager.bindGeometryEvents()
-	manager.bindDownloadInterception()
+	manager.bindPageEnhancements()
 	return manager
 }
 
-func (manager *windowManager) bindDownloadInterception() {
+func (manager *windowManager) bindPageEnhancements() {
 	install := func(*application.WindowEvent) {
 		manager.window.ExecJS(downloadInterceptorScript)
+		manager.zoom.restore()
 	}
 	manager.window.OnWindowEvent(events.Mac.WebViewDidFinishNavigation, install)
 	manager.window.OnWindowEvent(events.Windows.WebViewNavigationCompleted, install)
