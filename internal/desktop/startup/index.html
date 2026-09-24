@@ -22,13 +22,18 @@
     </section>
     <div class="actions" hidden>
       <button id="retry" type="button" hidden>重试</button>
-      <button id="copy" type="button">复制诊断信息</button>
     </div>
-    <p id="feedback" role="status" aria-live="polite"></p>
-    <details class="details">
-      <summary>查看启动详情</summary>
-      <div class="log" tabindex="0" role="region" aria-label="启动日志"></div>
-    </details>
+    <section class="logs" aria-labelledby="log-title">
+      <div class="log-toolbar">
+        <h2 id="log-title">启动记录</h2>
+        <button id="copy" type="button">复制日志</button>
+      </div>
+      <div class="log-frame">
+        <div class="log" tabindex="0" role="region" aria-label="启动日志"></div>
+        <button id="new-logs" type="button" hidden>新日志 ↓</button>
+      </div>
+      <p id="feedback" role="status" aria-live="polite"></p>
+    </section>
   </main>
   <script type="module" src="/app.js"></script>
 </body>

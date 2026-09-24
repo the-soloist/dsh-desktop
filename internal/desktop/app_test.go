@@ -84,6 +84,7 @@ func TestStartupAssets(t *testing.T) {
 		{path: "/styles.css", contentType: "text/css", contains: ".log-entry time"},
 		{path: "/app.js", contentType: "text/javascript", contains: `startup:frontend-ready`},
 		{path: "/state.js", contentType: "text/javascript", contains: `applyStartupUpdate`},
+		{path: "/log.js", contentType: "text/javascript", contains: `createStartupLog`},
 		{path: "/logo.png", contentType: "image/png"},
 	}
 	handler := startupAssetHandler("DSH Desktop")

@@ -15,7 +15,7 @@ body {
   place-items: center;
 }
 
-.startup { width: min(460px, 100%); }
+.startup { width: min(520px, 100%); }
 header { display: flex; align-items: center; gap: 16px; margin-bottom: 28px; }
 .logo { width: 56px; height: 56px; border-radius: 14px; object-fit: cover; }
 h1, h2, p { margin: 0; }
@@ -56,29 +56,50 @@ button {
 #retry { background: #b3ceff; border-color: #b3ceff; color: #0b1426; }
 button:hover { filter: brightness(1.12); }
 button:disabled { opacity: 0.55; cursor: wait; }
-button:focus-visible, summary:focus-visible, .log:focus-visible { outline: 2px solid #8ab6ff; outline-offset: 4px; }
-#feedback { margin-top: 12px; color: #a4b3cb; font-size: 12px; }
-#feedback:empty { display: none; }
-.details { margin-top: 24px; }
-summary { width: fit-content; color: #a4b3cb; font-size: 12px; cursor: pointer; user-select: none; }
-summary:hover { color: #edf2fb; }
+button:focus-visible, .log:focus-visible { outline: 2px solid #8ab6ff; outline-offset: 4px; }
+#feedback { margin-top: 8px; min-height: 18px; color: #a4b3cb; font-size: 12px; }
+.logs { margin-top: 32px; }
+.log-toolbar { display: flex; align-items: center; justify-content: space-between; padding-bottom: 12px; border-bottom: 1px solid #ffffff0d; }
+#log-title { font-size: 11px; font-weight: 500; letter-spacing: 0.12em; color: #8595af; }
+#copy { padding: 4px 0 4px 12px; font-size: 11px; color: #9cabbe; background: transparent; border-color: transparent; }
+#copy:hover { background: #17243a; }
+.log-frame { position: relative; }
 .log {
-  max-height: min(280px, 36vh);
-  margin-top: 12px;
-  padding: 14px;
+  height: 220px;
+  padding: 12px 16px 12px 0;
   overflow: auto;
-  border: 1px solid #26334a;
-  border-radius: 8px;
-  background: #080f1e;
-  color: #b8c5db;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 11px;
-  line-height: 1.7;
+  overscroll-behavior: contain;
+  overflow-anchor: none;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #304159 transparent;
+  color: #91a0b7;
+  font-size: 12px;
+  line-height: 1.65;
   overflow-wrap: anywhere;
 }
-.log-entry + .log-entry { margin-top: 10px; }
-.log-entry time { margin-right: 12px; color: #8a9bb5; font-variant-numeric: tabular-nums; }
-.log-entry p, .log-entry code { display: block; white-space: pre-wrap; font: inherit; }
-.log-entry code { color: #c8dfff; }
+.log.has-history {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 32px);
+  mask-image: linear-gradient(to bottom, transparent, black 32px);
+}
+.log-entry { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; align-items: baseline; gap: 12px; padding: 9px 0; color: #8a9bb4; opacity: 0.75; transition: color 300ms ease, opacity 300ms ease; }
+.log-marker { width: 5px; height: 5px; align-self: start; margin-top: 7px; border-radius: 50%; background: #3c4c65; transition: background 300ms ease, box-shadow 300ms ease; }
+.log-entry time { color: #61738f; font-size: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+.log-entry p, .log-entry code { white-space: pre-wrap; font: inherit; }
+.log-entry code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+.log-entry.latest { color: #e5eefc; opacity: 1; }
+.log-entry.latest .log-marker { background: #83b6ff; box-shadow: 0 0 0 4px #83b6ff10; }
+.log-entry.latest time { color: #93a8c7; }
+.log-entry.error { color: #faafbd; }
+.log-entry.error .log-marker { background: #fa91a4; box-shadow: 0 0 0 4px #fa91a410; }
+#new-logs { position: absolute; bottom: 10px; right: 14px; padding: 5px 10px; font-size: 12px; box-shadow: 0 3px 12px #0005; }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .indicator { animation: none; } }
+@media (max-height: 640px) {
+  body { padding: 24px; }
+  header { margin-bottom: 20px; }
+  .logs { margin-top: 24px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .indicator { animation: none; }
+  .log-entry, .log-marker { transition: none; }
+}
