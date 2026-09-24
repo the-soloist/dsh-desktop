@@ -29,3 +29,5 @@ macOS 和 Linux 会读取当前用户常见 shell 的环境配置，支持 zsh�
 3. `PATH` 以及各操作系统的常见默认安装路径。
 
 如果 `DSH_HOME` 未显式设置，但 `$XDG_CONFIG_HOME/dsh` 或默认的 `~/.config/dsh` 已存在，应用会自动设置 `DSH_HOME`。
+
+启动 `bunx` 时，如果 `TMP` 或 `TEMP` 未设置，应用会补齐缺失项。只缺其中一个时，使用另一个的路径；两个都没有时，Windows 使用 `%LOCALAPPDATA%\Temp`，否则使用 `%USERPROFILE%\AppData\Local\Temp`；macOS 和 Linux 优先使用 `TMPDIR`，没有则使用 `/tmp`。

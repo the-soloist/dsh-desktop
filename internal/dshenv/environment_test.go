@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -290,5 +291,52 @@ func TestResolveReadsConfiguredNPMRegistry(t *testing.T) {
 	}
 	if resolved.RegistryURL != "https://registry.example.test/npm" {
 		t.Fatalf("RegistryURL = %q", resolved.RegistryURL)
+	}
+}
+
+func TestWithBunxTempEnvironmentFillsMissingVariable(t *testing.T) {
+	got := withBunxTempEnvironment([]string{"TMP=/custom/tmp"})
+	if EnvironmentValue(got, "TMP") != "/custom/tmp" || EnvironmentValue(got, "TEMP") != "/custom/tmp" {
+		t.Fatalf("copied TEMP = TMP:%q TEMP:%q", EnvironmentValue(got, "TMP"), EnvironmentValue(got, "TEMP"))
+	}
+	got = withBunxTempEnvironment([]string{"TEMP=/custom/temp", "TMP=   "})
+	if EnvironmentValue(got, "TMP") != "/custom/temp" || EnvironmentValue(got, "TEMP") != "/custom/temp" {
+		t.Fatalf("copied TMP = TMP:%q TEMP:%q", EnvironmentValue(got, "TMP"), EnvironmentValue(got, "TEMP"))
+	}
+}
+
+func TestWithBunxTempEnvironmentKeepsExistingValues(t *testing.T) {
+	got := withBunxTempEnvironment([]string{"TMP=/one", "TEMP=/two", "OTHER=value"})
+	if EnvironmentValue(got, "TMP") != "/one" || EnvironmentValue(got, "TEMP") != "/two" || EnvironmentValue(got, "OTHER") != "value" {
+		t.Fatalf("environment = %#v", got)
+	}
+}
+
+func TestWithBunxTempEnvironmentUsesPlatformDefault(t *testing.T) {
+	directory := t.TempDir()
+	got := withBunxTempEnvironment([]string{"TMPDIR=" + directory})
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows default does not come from TMPDIR")
+	}
+	if EnvironmentValue(got, "TMP") != directory || EnvironmentValue(got, "TEMP") != directory {
+		t.Fatalf("default temp = TMP:%q TEMP:%q, want %q", EnvironmentValue(got, "TMP"), EnvironmentValue(got, "TEMP"), directory)
+	}
+}
+
+func TestDefaultTempDirectoryAdaptsToOperatingSystem(t *testing.T) {
+	if got, want := defaultTempDirectory("windows", []string{"LOCALAPPDATA=C:\\Users\\me\\AppData\\Local"}), `C:\Users\me\AppData\Local\Temp`; got != want {
+		t.Fatalf("LOCALAPPDATA temp = %q, want %q", got, want)
+	}
+	if got, want := defaultTempDirectory("windows", []string{"USERPROFILE=C:\\Users\\me"}), `C:\Users\me\AppData\Local\Temp`; got != want {
+		t.Fatalf("USERPROFILE temp = %q, want %q", got, want)
+	}
+	if got, want := defaultTempDirectory("windows", nil), `C:\Windows\Temp`; got != want {
+		t.Fatalf("windows fallback = %q, want %q", got, want)
+	}
+	if got, want := defaultTempDirectory("darwin", []string{"TMPDIR=/var/folders/T"}), "/var/folders/T"; got != want {
+		t.Fatalf("darwin TMPDIR = %q, want %q", got, want)
+	}
+	if got, want := defaultTempDirectory("linux", nil), "/tmp"; got != want {
+		t.Fatalf("linux fallback = %q, want %q", got, want)
 	}
 }

@@ -69,6 +69,13 @@ func (controller *controller) runServiceAction(restart bool) {
 	if runtimeEnvironment.DSHHome != "" {
 		controller.logger.Printf("[environment] DSH_HOME=%s", runtimeEnvironment.DSHHome)
 	}
+	if runtimeEnvironment.Runner.Name == dshenv.RunnerBunx {
+		controller.logger.Printf(
+			"[environment] TMP=%s TEMP=%s",
+			dshenv.EnvironmentValue(runtimeEnvironment.Environment, "TMP"),
+			dshenv.EnvironmentValue(runtimeEnvironment.Environment, "TEMP"),
+		)
+	}
 	controller.setStartupStatus("正在获取 DSH 版本", "正在从 npm registry 查询最新版本…", false)
 	registryClient, err := npmregistry.NewClient(runtimeEnvironment.RegistryURL, nil)
 	if err != nil {

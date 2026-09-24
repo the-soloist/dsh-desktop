@@ -50,6 +50,9 @@ func Resolve(base []string) (Runtime, error) {
 		return result, fmt.Errorf("%w: %v", ErrNodeNotFound, err)
 	}
 	environment, dshHome := withDSHHome(environment)
+	if runner.Name == RunnerBunx {
+		environment = withBunxTempEnvironment(environment)
+	}
 	if runner.Name == RunnerNPX {
 		environment = SetEnvironment(environment, "NPM_CONFIG_YES", "true")
 	}
@@ -182,4 +185,84 @@ func homeDirectory(environment []string) (string, error) {
 		}
 	}
 	return os.UserHomeDir()
+}
+
+// withBunxTempEnvironment ensures bunx sees both TMP and TEMP. A missing
+// variable copies the other one; if both are absent, the platform temp
+// directory is used.
+func withBunxTempEnvironment(environment []string) []string {
+	tmp := tempEnvironmentValue(environment, "TMP")
+	temp := tempEnvironmentValue(environment, "TEMP")
+	if tmp != "" && temp != "" {
+		return environment
+	}
+	directory := tmp
+	if directory == "" {
+		directory = temp
+	}
+	if directory == "" {
+		directory = defaultTempDirectory(runtime.GOOS, environment)
+		if directory != "" {
+			_ = os.MkdirAll(directory, 0o700)
+		}
+	}
+	if directory == "" {
+		return environment
+	}
+	if tmp == "" {
+		environment = SetEnvironment(environment, "TMP", directory)
+	}
+	if temp == "" {
+		environment = SetEnvironment(environment, "TEMP", directory)
+	}
+	return environment
+}
+
+func tempEnvironmentValue(environment []string, key string) string {
+	if runtime.GOOS == "windows" {
+		return strings.TrimSpace(EnvironmentValue(environment, key))
+	}
+	for _, item := range environment {
+		name, value, found := strings.Cut(item, "=")
+		if found && name == key {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func defaultTempDirectory(goos string, environment []string) string {
+	if goos == "windows" {
+		if local := strings.TrimSpace(EnvironmentValue(environment, "LOCALAPPDATA")); local != "" {
+			return joinOSPath(goos, local, "Temp")
+		}
+		if profile := strings.TrimSpace(EnvironmentValue(environment, "USERPROFILE")); profile != "" {
+			return joinOSPath(goos, profile, "AppData", "Local", "Temp")
+		}
+		return `C:\Windows\Temp`
+	}
+	if directory := strings.TrimSpace(EnvironmentValue(environment, "TMPDIR")); directory != "" {
+		return directory
+	}
+	return "/tmp"
+}
+
+func joinOSPath(goos string, parts ...string) string {
+	separator := "/"
+	if goos == "windows" {
+		separator = `\`
+	}
+	cleaned := make([]string, 0, len(parts))
+	for index, part := range parts {
+		part = strings.TrimSpace(part)
+		if index == 0 {
+			part = strings.TrimRight(part, `/\`)
+		} else {
+			part = strings.Trim(part, `/\`)
+		}
+		if part != "" {
+			cleaned = append(cleaned, part)
+		}
+	}
+	return strings.Join(cleaned, separator)
 }
