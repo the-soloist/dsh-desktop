@@ -138,10 +138,10 @@ func (controller *controller) bind() {
 
 func (controller *controller) bindTray() {
 	menu := controller.app.NewMenu()
+	controller.profileMenu = menu.AddSubmenu("切换Profile")
+	controller.populateProfileMenu()
 	menu.Add("强制刷新").OnClick(func(*application.Context) { controller.window.forceReload() })
 	menu.Add("重启DSH").OnClick(func(*application.Context) { controller.requestRestart() })
-	controller.profileMenu = menu.AddSubmenu("切换 Profile")
-	controller.populateProfileMenu()
 	menu.Add("检查更新").OnClick(func(*application.Context) { controller.requestUpdateCheck() })
 	menu.AddSeparator()
 	menu.Add("关于").OnClick(func(*application.Context) { controller.app.Menu.ShowAbout() })
