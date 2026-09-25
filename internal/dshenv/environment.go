@@ -40,6 +40,17 @@ type Runtime struct {
 func Resolve(base []string) (Runtime, error) {
 	environment, shell, shellErr := LoadShellEnvironment(base)
 	result := Runtime{Environment: environment, Shell: shell, ShellError: shellErr}
+	workspace, err := Workspace(environment)
+	if err != nil {
+		return result, fmt.Errorf("%w: %v", ErrWorkspace, err)
+	}
+	environment, dshHome, err := withEffectiveDSHHome(environment, workspace)
+	if err != nil {
+		return result, err
+	}
+	result.Environment = environment
+	result.DSHHome = expandLaunchPath(dshHome)
+	result.Workspace = expandLaunchPath(workspace)
 
 	runner, err := FindPackageRunner(environment)
 	if err != nil {
@@ -49,7 +60,6 @@ func Resolve(base []string) (Runtime, error) {
 	if err != nil {
 		return result, fmt.Errorf("%w: %v", ErrNodeNotFound, err)
 	}
-	environment, dshHome := withDSHHome(environment)
 	if runner.Name == RunnerBunx {
 		environment = withBunxTempEnvironment(environment)
 	}
@@ -60,19 +70,38 @@ func Resolve(base []string) (Runtime, error) {
 		environment,
 		runtimeExecutablePaths(environment, runner.Path, nodePath)...,
 	)
-	workspace, err := Workspace(environment)
-	if err != nil {
-		return result, fmt.Errorf("%w: %v", ErrWorkspace, err)
-	}
 	environment = expandLaunchEnvironmentPaths(environment)
 
 	result.Environment = environment
 	result.Runner = PackageRunner{Name: runner.Name, Path: expandLaunchPath(runner.Path)}
 	result.NodePath = expandLaunchPath(nodePath)
-	result.DSHHome = expandLaunchPath(dshHome)
-	result.Workspace = expandLaunchPath(workspace)
 	result.RegistryURL = npmRegistryURL(environment)
 	return result, nil
+}
+
+// Resolve relative DSH_HOME against the child's working directory, just as
+// DSH does. The menu and the child must use the very same absolute home.
+func withEffectiveDSHHome(environment []string, workspace string) ([]string, string, error) {
+	environment, directory := withDSHHome(environment)
+	if directory == "" || directory == "~" || strings.HasPrefix(directory, "~/") || strings.HasPrefix(directory, `~\`) {
+		home, err := homeDirectory(environment)
+		if err != nil {
+			return environment, "", err
+		}
+		switch {
+		case directory == "":
+			directory = filepath.Join(home, ".dsh")
+		case directory == "~":
+			directory = home
+		default:
+			directory = filepath.Join(home, directory[2:])
+		}
+	}
+	if !filepath.IsAbs(directory) {
+		directory = filepath.Join(workspace, directory)
+	}
+	directory = expandLaunchPath(filepath.Clean(directory))
+	return SetEnvironment(environment, "DSH_HOME", directory), directory, nil
 }
 
 func npmRegistryURL(environment []string) string {

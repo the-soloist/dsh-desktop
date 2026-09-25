@@ -17,6 +17,33 @@ func TestSetEnvironmentReplacesExistingValue(t *testing.T) {
 	}
 }
 
+func TestEffectiveDSHHomeUsesSameAbsolutePathForMenuAndChild(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	xdg := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(xdg, "dsh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name string
+		env  []string
+		want string
+	}{
+		{"default", nil, filepath.Join(home, ".dsh")},
+		{"xdg", []string{"XDG_CONFIG_HOME=" + xdg}, filepath.Join(xdg, "dsh")},
+		{"tool priority", []string{"DSH_HOME=" + workspace, "XDG_CONFIG_HOME=" + xdg}, workspace},
+		{"relative to child", []string{"DSH_HOME=data"}, filepath.Join(workspace, "data")},
+		{"tilde", []string{"DSH_HOME=~/custom"}, filepath.Join(home, "custom")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			environment, got, err := withEffectiveDSHHome(append(test.env, "HOME="+home, "USERPROFILE="+home), workspace)
+			if err != nil || got != test.want || EnvironmentValue(environment, "DSH_HOME") != got {
+				t.Fatalf("home=%q, env=%q, err=%v; want %q", got, EnvironmentValue(environment, "DSH_HOME"), err, test.want)
+			}
+		})
+	}
+}
+
 func TestPrependExecutablePathsDeduplicatesEntries(t *testing.T) {
 	first := filepath.Join("", "opt", "homebrew", "bin")
 	existing := filepath.Join("", "usr", "bin")
