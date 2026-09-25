@@ -169,7 +169,7 @@ func TestCloseRejectsFutureStarts(t *testing.T) {
 	if err := supervisor.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	_, err := supervisor.Start(context.Background(), "missing-runner", "example@1.0.0", t.TempDir(), nil, 3080, io.Discard)
+	_, err := supervisor.Start(context.Background(), Launch{RunnerPath: "missing-runner", PackageReference: "example@1.0.0", Workspace: t.TempDir(), Profile: "web", Port: 3080}, io.Discard)
 	if !errors.Is(err, ErrClosed) {
 		t.Fatalf("Start() error = %v, want ErrClosed", err)
 	}

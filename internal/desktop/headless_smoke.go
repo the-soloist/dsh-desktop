@@ -11,6 +11,7 @@ import (
 	"github.com/the-soloist/dsh-desktop/internal/backend"
 	"github.com/the-soloist/dsh-desktop/internal/dshenv"
 	"github.com/the-soloist/dsh-desktop/internal/npmregistry"
+	"github.com/the-soloist/dsh-desktop/internal/profile"
 )
 
 func runHeadlessSmokeTest() (result error) {
@@ -44,7 +45,7 @@ func runHeadlessSmokeTest() (result error) {
 	if err != nil {
 		return err
 	}
-	preparation := newLaunchPreparation(supervisor,
+	preparation := newLaunchPreparation(
 		func(_ context.Context, processes []backend.DSHProcess) (externalDSHChoice, error) {
 			logger.Printf("[smoke] preserving %d existing DSH instances", len(processes))
 			return externalDSHOtherPort, nil
@@ -54,10 +55,6 @@ func runHeadlessSmokeTest() (result error) {
 		return err
 	}
 	supervisor.SetURL(loopbackURL(plan.port))
-	if plan.reuse {
-		logger.Printf("[smoke] reused DSH at %s", supervisor.URL())
-		return nil
-	}
 
 	runtimeEnvironment, err := dshenv.Resolve(os.Environ())
 	if err != nil {
@@ -78,11 +75,11 @@ func runHeadlessSmokeTest() (result error) {
 	defer output.Flush()
 	process, err := supervisor.Start(
 		context.Background(),
-		runtimeEnvironment.Runner.Path,
-		packageReference,
-		runtimeEnvironment.Workspace,
-		runtimeEnvironment.Environment,
-		plan.port,
+		backend.Launch{
+			RunnerPath: runtimeEnvironment.Runner.Path, PackageReference: packageReference,
+			Workspace: runtimeEnvironment.Workspace, Environment: runtimeEnvironment.Environment,
+			Profile: profile.Default, Port: plan.port,
+		},
 		output,
 	)
 	if err != nil {

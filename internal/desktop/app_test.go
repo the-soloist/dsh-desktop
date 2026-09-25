@@ -231,11 +231,3 @@ func TestHeadlessSmokeTestEnabledUsesEnvironment(t *testing.T) {
 		t.Fatal("headlessSmokeTestEnabled() = false, want true")
 	}
 }
-
-func TestDSHLaunchCommandIncludesExactVersion(t *testing.T) {
-	got := dshLaunchCommand("bunx", "@deepseek-ai/dsh@0.1.2-rc.1", 3080)
-	want := "bunx @deepseek-ai/dsh@0.1.2-rc.1 web --no-open --port 3080"
-	if got != want {
-		t.Fatalf("dshLaunchCommand() = %q, want %q", got, want)
-	}
-}

@@ -12,6 +12,7 @@ import (
 	dshdesktop "github.com/the-soloist/dsh-desktop"
 	"github.com/the-soloist/dsh-desktop/internal/appicon"
 	"github.com/the-soloist/dsh-desktop/internal/backend"
+	"github.com/the-soloist/dsh-desktop/internal/profile"
 	releaseupdate "github.com/the-soloist/dsh-desktop/internal/update"
 )
 
@@ -19,6 +20,13 @@ type controller struct {
 	app                  *application.App
 	window               *windowManager
 	backend              *backend.Supervisor
+	profiles             *profile.Manager
+	actionMu             sync.Mutex
+	trayMu               sync.Mutex
+	tray                 *application.SystemTray
+	trayMenu             *application.Menu
+	profileMenu          *application.Menu
+	profileConfirming    atomic.Bool
 	metadata             dshdesktop.Metadata
 	serviceContext       context.Context
 	cancelService        context.CancelFunc
@@ -68,10 +76,15 @@ func newController(
 	if scheduleErr == nil {
 		updateSchedule = releaseupdate.NewSchedule(updateSchedulePath, updateCheckInterval)
 	}
+	profilePath, profileErr := profile.Path(metadata.InternalName)
+	if profileErr != nil {
+		logger.Printf("[profile] cannot resolve preferences path: %v", profileErr)
+	}
 	return &controller{
 		app:                 app,
 		window:              window,
 		backend:             supervisor,
+		profiles:            profile.New(profilePath),
 		metadata:            metadata,
 		serviceContext:      serviceContext,
 		cancelService:       cancelService,
@@ -127,6 +140,8 @@ func (controller *controller) bindTray() {
 	menu := controller.app.NewMenu()
 	menu.Add("强制刷新").OnClick(func(*application.Context) { controller.window.forceReload() })
 	menu.Add("重启DSH").OnClick(func(*application.Context) { controller.requestRestart() })
+	controller.profileMenu = menu.AddSubmenu("切换 Profile")
+	controller.populateProfileMenu()
 	menu.Add("检查更新").OnClick(func(*application.Context) { controller.requestUpdateCheck() })
 	menu.AddSeparator()
 	menu.Add("关于").OnClick(func(*application.Context) { controller.app.Menu.ShowAbout() })
@@ -136,6 +151,8 @@ func (controller *controller) bindTray() {
 	tray.SetTooltip(controller.metadata.DisplayName)
 	tray.SetMenu(menu)
 	tray.OnClick(controller.window.show)
+	controller.tray = tray
+	controller.trayMenu = menu
 }
 
 func (controller *controller) onStartupFrontendReady(event *application.CustomEvent) {
@@ -174,11 +191,14 @@ func (controller *controller) onStartupCopy(event *application.CustomEvent) {
 }
 
 func (controller *controller) requestRestart() {
+	controller.actionMu.Lock()
+	defer controller.actionMu.Unlock()
 	if !controller.service.scheduleRestart() {
 		return
 	}
 	controller.logger.Printf("[dsh] restart requested")
 	controller.startup.reset(startupPreparing, "正在重启 DSH", "正在停止现有服务…")
+	controller.refreshProfileMenu()
 	controller.requestStartupPage(startupIntentRestart)
 }
 

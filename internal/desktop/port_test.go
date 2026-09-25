@@ -52,7 +52,7 @@ func TestLaunchPreparationChecksProcessesBeforePorts(t *testing.T) {
 				want = append(want, "stop")
 			}
 			want = append(want, "3080", "3081")
-			if err != nil || plan.port != 3081 || plan.reuse || !reflect.DeepEqual(steps, want) {
+			if err != nil || plan.port != 3081 || !reflect.DeepEqual(steps, want) {
 				t.Fatalf("plan=%+v, steps=%v, err=%v", plan, steps, err)
 			}
 		})
@@ -96,20 +96,19 @@ func TestLaunchPreparationStopsOnInspectionOrConfirmationFailure(t *testing.T) {
 	}
 }
 
-func TestLaunchPreparationReusesOnlyAfterDiscovery(t *testing.T) {
+func TestLaunchPreparationNeverReusesAnUnidentifiedProfile(t *testing.T) {
 	discovered := false
 	preparation := launchPreparation{
 		discover: func(context.Context) ([]backend.DSHProcess, error) { discovered = true; return nil, nil },
-		reuse: func(context.Context) bool {
+		available: func(port int) bool {
 			if !discovered {
-				t.Fatal("probed before checking processes")
+				t.Fatal("checked ports before discovering processes")
 			}
-			return true
+			return port == 3081
 		},
-		available: func(int) bool { t.Fatal("selected port for reused service"); return true },
 	}
 	plan, err := preparation.prepare(context.Background(), 3080)
-	if err != nil || !plan.reuse || plan.port != 3080 {
+	if err != nil || plan.port != 3081 {
 		t.Fatalf("plan=%+v, err=%v", plan, err)
 	}
 }

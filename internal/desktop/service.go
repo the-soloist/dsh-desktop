@@ -26,15 +26,19 @@ func (controller *controller) startService(restart bool) {
 }
 
 func (controller *controller) runServiceAction(restart bool) {
-	if !controller.prepareService(restart) {
-		return
-	}
 	if controller.quitting.Load() {
 		return
 	}
 
 	controller.setStartupStatus(startupPreparing, "正在检查运行环境", "正在读取环境并查找 bunx、npx 与 Node.js…")
 	runtimeEnvironment, err := dshenv.Resolve(os.Environ())
+	if runtimeEnvironment.DSHHome != "" {
+		if profileErr := controller.profiles.Refresh(runtimeEnvironment.DSHHome); profileErr != nil {
+			controller.showStartupFailure("无法读取 Profile 列表。", profileErr)
+			return
+		}
+		controller.refreshProfileMenu()
+	}
 	if runtimeEnvironment.ShellError != nil {
 		controller.logger.Printf("[environment] shell import skipped: %v", runtimeEnvironment.ShellError)
 	} else if runtimeEnvironment.Shell.Shell != "" && len(runtimeEnvironment.Shell.Sources) > 0 {
@@ -65,6 +69,12 @@ func (controller *controller) runServiceAction(restart bool) {
 	if runtimeEnvironment.DSHHome != "" {
 		controller.logger.Printf("[environment] DSH_HOME=%s", runtimeEnvironment.DSHHome)
 	}
+	selectedProfile := controller.profiles.Snapshot().Selected
+	if err := controller.profiles.Select(selectedProfile); err != nil {
+		controller.showStartupFailure("无法使用所选 Profile，请从托盘选择其他配置。", err)
+		return
+	}
+	controller.logger.Printf("[profile] selected=%s", selectedProfile)
 	if runtimeEnvironment.Runner.Name == dshenv.RunnerBunx {
 		controller.logger.Printf(
 			"[environment] TMP=%s TEMP=%s",
@@ -90,6 +100,11 @@ func (controller *controller) runServiceAction(restart bool) {
 	}
 	packageReference := npmregistry.ExactReference(controller.metadata.DSHPackage, latestVersion)
 	controller.logger.Printf("[registry] latest package: %s", packageReference)
+	// Validate environment, profile and package version before stopping the
+	// previous managed process. Switching never reuses an unidentified service.
+	if !controller.prepareService(restart) {
+		return
+	}
 	controller.launchDSH(
 		runtimeEnvironment.Runner,
 		packageReference,
@@ -105,7 +120,16 @@ func (controller *controller) launchDSH(runner dshenv.PackageRunner, packageRefe
 		controller.showStartupFailure("无法解析 DSH 端口。", err)
 		return
 	}
-	command := dshLaunchCommand(runner.Name, packageReference, port)
+	launch := backend.Launch{
+		RunnerPath: runner.Path, PackageReference: packageReference,
+		Workspace: workspace, Environment: environment,
+		Profile: controller.profiles.Snapshot().Selected, Port: port,
+	}
+	command, err := launch.DisplayCommand(runner.Name)
+	if err != nil {
+		controller.showStartupFailure("DSH 启动参数无效。", err)
+		return
+	}
 	controller.setStartupCommand("正在启动 DSH", command)
 	controller.logger.Printf("[dsh] working directory: %s", workspace)
 	summaryLines := make(chan string, 32)
@@ -122,7 +146,7 @@ func (controller *controller) launchDSH(runner dshenv.PackageRunner, packageRefe
 		default:
 		}
 	})
-	process, err := controller.backend.Start(context.Background(), runner.Path, packageReference, workspace, environment, port, output)
+	process, err := controller.backend.Start(context.Background(), launch, output)
 	if err != nil {
 		if controller.quitting.Load() || errors.Is(err, backend.ErrClosed) {
 			return
@@ -192,12 +216,8 @@ func (controller *controller) launchDSH(runner dshenv.PackageRunner, packageRefe
 		}
 		controller.logger.Printf("[dsh] authentication cookie acquired via network")
 	}
-	controller.monitorBackend(process)
 	controller.showDSH("服务已就绪，正在建立 WebView 会话…", authenticationCookie)
-}
-
-func dshLaunchCommand(runnerName, packageReference string, port int) string {
-	return fmt.Sprintf("%s %s web --no-open --port %d", runnerName, packageReference, port)
+	controller.monitorBackend(process)
 }
 
 const authenticationURLWait = 15 * time.Second
@@ -256,25 +276,35 @@ func (controller *controller) consumeOutputSummary(process *backend.Process, lin
 func (controller *controller) monitorBackend(process *backend.Process) {
 	go func() {
 		<-process.Done()
-		controller.closeAuthenticationProxy()
-		if !controller.backend.ClearIfCurrent(process) || controller.quitting.Load() {
-			return
-		}
-		message := "DSH 服务已停止，请点击重试重新启动。"
-		if processErr := process.WaitError(); processErr != nil {
-			controller.logger.Printf("[dsh] process exited: %v", processErr)
-			message += "\n\n" + processErr.Error()
-			controller.recordSmokeFailure(fmt.Errorf("DSH process exited: %w", processErr))
-		} else {
-			controller.logger.Printf("[dsh] process exited")
-			controller.recordSmokeFailure(errors.New("DSH process exited"))
-		}
-		controller.service.set(serviceStopped)
-		controller.logger.Printf("[startup] DSH 已停止 — %s", strings.ReplaceAll(message, "\n", " "))
-		controller.startup.reset(startupStopped, "DSH 已停止", message)
-		controller.requestStartupPage(startupIntentNone)
-		controller.scheduleSmokeFailureExit()
+		controller.onBackendExit(process)
 	}()
+}
+
+func (controller *controller) onBackendExit(process *backend.Process) {
+	controller.actionMu.Lock()
+	defer controller.actionMu.Unlock()
+	if !controller.backend.ClearIfCurrent(process) || controller.quitting.Load() {
+		return
+	}
+	controller.profiles.ClearActive()
+	if !controller.service.markStopped() {
+		return
+	}
+	controller.closeAuthenticationProxy()
+	message := "DSH 服务已停止，请点击重试重新启动。"
+	if processErr := process.WaitError(); processErr != nil {
+		controller.logger.Printf("[dsh] process exited: %v", processErr)
+		message += "\n\n" + processErr.Error()
+		controller.recordSmokeFailure(fmt.Errorf("DSH process exited: %w", processErr))
+	} else {
+		controller.logger.Printf("[dsh] process exited")
+		controller.recordSmokeFailure(errors.New("DSH process exited"))
+	}
+	controller.refreshProfileMenu()
+	controller.logger.Printf("[startup] DSH 已停止 — %s", strings.ReplaceAll(message, "\n", " "))
+	controller.startup.reset(startupStopped, "DSH 已停止", message)
+	controller.requestStartupPage(startupIntentNone)
+	controller.scheduleSmokeFailureExit()
 }
 
 func (controller *controller) stopProcess(process *backend.Process) {
@@ -300,6 +330,7 @@ func (controller *controller) showStartupFailure(summary string, failure error) 
 		detail += "\n\n" + failure.Error()
 	}
 	controller.service.set(serviceFailed)
+	controller.refreshProfileMenu()
 	controller.logger.Printf("[startup] DSH 启动失败 — %s", strings.ReplaceAll(redactSensitiveOutput(detail), "\n", " "))
 	controller.window.window.EmitEvent(startupUpdateEvent, controller.startup.fail(summary, detail))
 	controller.window.show()
@@ -325,7 +356,7 @@ func (controller *controller) navigateToDSH(authenticationCookie *http.Cookie, g
 		controller.closeAuthenticationProxy()
 		controller.logger.Printf("[dsh] opening DSH URL: %s", controller.backend.URL())
 		controller.window.window.SetURL(controller.backend.URL())
-		controller.service.set(serviceReady)
+		controller.markProfileReady()
 		controller.window.show()
 		controller.scheduleSmokeSuccess()
 		return
@@ -345,7 +376,7 @@ func (controller *controller) navigateToDSH(authenticationCookie *http.Cookie, g
 	controller.setStartupStatus(startupConnecting, "认证连接已就绪", "Cookie 已验证，认证代理已就绪，正在加载 DSH 页面…")
 	controller.logger.Printf("[dsh] opening authenticated WebView proxy: %s", proxy.URL())
 	controller.window.window.SetURL(proxy.URL())
-	controller.service.set(serviceReady)
+	controller.markProfileReady()
 	controller.window.show()
 	controller.scheduleSmokeSuccess()
 }

@@ -44,6 +44,11 @@ func (lifecycle *serviceLifecycle) beginRestart() bool {
 	return lifecycle.phase.CompareAndSwap(uint32(serviceRestartPending), uint32(serviceRestarting))
 }
 
+// A late exit notification must not replace a pending profile switch.
+func (lifecycle *serviceLifecycle) markStopped() bool {
+	return lifecycle.phase.CompareAndSwap(uint32(serviceReady), uint32(serviceStopped))
+}
+
 func (lifecycle *serviceLifecycle) set(next servicePhase) {
 	lifecycle.phase.Store(uint32(next))
 }

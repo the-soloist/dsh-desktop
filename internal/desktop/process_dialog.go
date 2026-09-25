@@ -46,6 +46,10 @@ func questionButtonLabels(goos string) (string, string) {
 }
 
 func (controller *controller) askDSHQuestion(ctx context.Context, message string) (bool, error) {
+	return controller.askQuestion(ctx, "检测到已有 DSH", message)
+}
+
+func (controller *controller) askQuestion(ctx context.Context, title, message string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -57,7 +61,7 @@ func (controller *controller) askDSHQuestion(ctx context.Context, message string
 		}
 	}
 	yes, no := questionButtonLabels(runtime.GOOS)
-	dialog := controller.app.Dialog.Question().SetTitle("检测到已有 DSH").SetMessage(message)
+	dialog := controller.app.Dialog.Question().SetTitle(title).SetMessage(message)
 	dialog.AttachToWindow(controller.window.window)
 	dialog.AddButton(yes).OnClick(func() { answer(true) })
 	cancel := dialog.AddButton(no).OnClick(func() { answer(false) })

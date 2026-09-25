@@ -10,7 +10,6 @@ import (
 	"log"
 	"net/http"
 	"os/exec"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -101,11 +100,7 @@ func NewSupervisor(config Config) *Supervisor {
 // process already owned by this supervisor.
 func (supervisor *Supervisor) Start(
 	ctx context.Context,
-	runnerPath string,
-	packageReference string,
-	workspace string,
-	environment []string,
-	port int,
+	launch Launch,
 	output io.Writer,
 ) (*Process, error) {
 	supervisor.mu.Lock()
@@ -116,13 +111,14 @@ func (supervisor *Supervisor) Start(
 	if supervisor.active != nil && !supervisor.active.exited() {
 		return nil, errors.New("a managed DSH process is already running")
 	}
-	if port < 1 || port > 65535 {
-		return nil, fmt.Errorf("invalid DSH port %d", port)
+	arguments, err := launch.Args()
+	if err != nil {
+		return nil, err
 	}
 
-	command := newPackageRunnerCommand(ctx, runnerPath, packageReference, "web", "--no-open", "--port", strconv.Itoa(port))
-	command.Dir = workspace
-	command.Env = environment
+	command := newPackageRunnerCommand(ctx, launch.RunnerPath, arguments...)
+	command.Dir = launch.Workspace
+	command.Env = launch.Environment
 	command.Stdout = output
 	command.Stderr = output
 	configureChildProcess(command)
