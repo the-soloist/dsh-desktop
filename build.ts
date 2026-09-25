@@ -1,9 +1,9 @@
 import process from "node:process";
-import { prepareOutput } from "./build/common";
-import { createBuildContext } from "./build/config";
-import { buildLinux } from "./build/platforms/linux";
-import { buildMacOS } from "./build/platforms/macos";
-import { buildWindows } from "./build/platforms/windows";
+import { prepareOutput } from "./scripts/build/common";
+import { createBuildContext } from "./scripts/build/config";
+import { buildLinux } from "./scripts/build/platforms/linux";
+import { buildMacOS } from "./scripts/build/platforms/macos";
+import { buildWindows } from "./scripts/build/platforms/windows";
 
 const context = createBuildContext(process.argv.slice(2));
 await prepareOutput(context);

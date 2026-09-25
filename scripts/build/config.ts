@@ -1,7 +1,7 @@
 import path from "node:path";
 import process from "node:process";
-import metadataDocument from "../APP_METADATA.json" with { type: "json" };
-import embeddedVersion from "../VERSION" with { type: "text" };
+import metadataDocument from "../../APP_METADATA.json" with { type: "json" };
+import embeddedVersion from "../../VERSION" with { type: "text" };
 
 export type PlatformName = "macos" | "linux" | "windows";
 export type Architecture = "x86_64" | "arm64";
@@ -44,7 +44,7 @@ export function createBuildContext(arguments_: string[]): BuildContext {
   const platform = resolvePlatform();
   const architecture = resolveArchitecture();
   validateNativeTarget(platform, architecture);
-  const repositoryRoot = path.resolve(import.meta.dir, "..");
+  const repositoryRoot = path.resolve(import.meta.dir, "../..");
   const distRoot = path.join(repositoryRoot, "dist");
   const platformOutput = path.join(distRoot, platform);
   const intermediate = path.join(distRoot, "intermediate", platform);
