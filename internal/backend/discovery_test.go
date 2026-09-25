@@ -58,6 +58,22 @@ func TestFindDSHProcessesIncludesOtherPortsAndDeduplicatesChildren(t *testing.T)
 	}
 }
 
+func TestFindDSHProcessesExcludesOwnAppImageLauncherAndAncestors(t *testing.T) {
+	processes := []processIdentity{
+		// ps prints this executable path without quotes. The space makes the
+		// command parser see "DSH" as argv[0]; it must never become a target
+		// for our own process-discovery confirmation or termination.
+		{PID: 10, ParentPID: 1, Started: "wrapper", Command: "/tmp/dist/DSH Desktop.AppImage"},
+		{PID: 11, ParentPID: 10, Started: "wrapper-child", Command: "sh /tmp/appimage/AppRun"},
+		{PID: 12, ParentPID: 11, Started: "self", Command: "/tmp/appimage/usr/bin/DSH Desktop"},
+		{PID: 20, ParentPID: 1, Started: "external", Command: "bunx @deepseek-ai/dsh --profile work --port 3080"},
+	}
+	got := findDSHProcesses(processes, 12)
+	if len(got) != 1 || got[0].PID != 20 {
+		t.Fatalf("process discovery included its own launcher: %+v", got)
+	}
+}
+
 func TestStopDSHProcessesRejectsReusedPID(t *testing.T) {
 	old := processIdentity{PID: 10, Started: "old", Command: "dsh web"}
 	confirmed := []DSHProcess{{PID: old.PID, identity: old}}

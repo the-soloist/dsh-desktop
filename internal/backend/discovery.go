@@ -39,9 +39,16 @@ func findDSHProcesses(processes []processIdentity, self int) []DSHProcess {
 	for _, process := range processes {
 		byPID[process.PID] = process
 	}
+	// Never offer to terminate our launcher or its ancestors. AppImage's
+	// extract-and-run wrapper stays alive as a parent, and ps does not quote
+	// its "DSH Desktop.AppImage" executable path.
+	ancestors := make(map[int]bool)
+	for pid := self; pid > 1 && !ancestors[pid]; pid = byPID[pid].ParentPID {
+		ancestors[pid] = true
+	}
 	var result []DSHProcess
 	for _, process := range processes {
-		if process.PID <= 1 || process.PID == self || process.Started == "" || !isDSHCommand(process.Command) {
+		if process.PID <= 1 || ancestors[process.PID] || process.Started == "" || !isDSHCommand(process.Command) {
 			continue
 		}
 		duplicate := false

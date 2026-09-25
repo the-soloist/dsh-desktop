@@ -37,9 +37,16 @@ func TestEffectiveDSHHomeUsesSameAbsolutePathForMenuAndChild(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			environment, got, err := withEffectiveDSHHome(append(test.env, "HOME="+home, "USERPROFILE="+home), workspace)
-			if err != nil || got != test.want || EnvironmentValue(environment, "DSH_HOME") != got {
+			if err != nil || !filepath.IsAbs(got) || EnvironmentValue(environment, "DSH_HOME") != got {
 				t.Fatalf("home=%q, env=%q, err=%v; want %q", got, EnvironmentValue(environment, "DSH_HOME"), err, test.want)
 			}
+			// Resolve first, while a default/relative/tilde leaf may not exist.
+			// Then compare filesystem identity: Windows can expand a RUNNER~1
+			// fixture root to runneradmin without changing its destination.
+			if err := os.MkdirAll(test.want, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			assertSamePath(t, "DSH_HOME", got, test.want)
 		})
 	}
 }

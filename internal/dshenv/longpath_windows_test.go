@@ -3,6 +3,7 @@
 package dshenv
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -66,6 +67,32 @@ func TestResolveExpandsWindowsShortPaths(t *testing.T) {
 	for index, want := range []string{filepath.Dir(resolved.Runner.Path), filepath.Dir(resolved.NodePath)} {
 		if path[index] != want {
 			t.Errorf("PATH[%d] = %q, want long path %q", index, path[index], want)
+		}
+	}
+}
+
+func TestEffectiveDSHHomeExpandsShortParentBeforeLeafExists(t *testing.T) {
+	root := windowsTestPathName(t, t.TempDir(), windows.GetLongPathName)
+	home := filepath.Join(root, "Profile Home With Long Names")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	shortHome := windowsTestPathName(t, home, windows.GetShortPathName)
+	if strings.EqualFold(shortHome, home) {
+		t.Skip("the temporary volume does not provide an 8.3 short-name alias")
+	}
+	for _, leaf := range []string{".dsh", filepath.Join("profiles", "not-created")} {
+		base := []string{"HOME=" + shortHome, "USERPROFILE=" + shortHome}
+		if leaf != ".dsh" {
+			base = append(base, "DSH_HOME="+leaf)
+		}
+		environment, got, err := withEffectiveDSHHome(base, shortHome)
+		want := filepath.Join(home, leaf)
+		if err != nil || got != want || EnvironmentValue(environment, "DSH_HOME") != want {
+			t.Fatalf("home=%q, env=%q, err=%v; want long path %q", got, EnvironmentValue(environment, "DSH_HOME"), err, want)
+		}
+		if _, err := os.Stat(want); !os.IsNotExist(err) {
+			t.Fatalf("resolving home should not create %q: %v", want, err)
 		}
 	}
 }

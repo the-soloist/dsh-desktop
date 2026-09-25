@@ -41,14 +41,7 @@ func (controller *controller) prepareService(restart bool) bool {
 		return false
 	}
 	controller.setStartupStatus(startupPreparing, "正在检查已有 DSH", "正在检查其他 DSH 进程，随后检查可用端口…")
-	choose := controller.confirmExternalDSH
-	if restart {
-		// Switching/retrying only owns our child. Other profiles and terminal
-		// sessions remain alive, even when they occupy the preferred port.
-		choose = func(context.Context, []backend.DSHProcess) (externalDSHChoice, error) {
-			return externalDSHOtherPort, nil
-		}
-	}
+	choose := externalDSHLaunchChoice(restart, smokeTestEnabled(), controller.confirmExternalDSH)
 	preparation := newLaunchPreparation(choose)
 	plan, err := preparation.prepare(ctx, preferredPort)
 	if err != nil {
@@ -63,4 +56,15 @@ func (controller *controller) prepareService(restart bool) bool {
 	controller.backend.SetURL(loopbackURL(plan.port))
 	controller.setStartupStatus(startupPreparing, "启动端口已确定", "将使用 "+controller.backend.URL()+" 启动 DSH。")
 	return true
+}
+
+func externalDSHLaunchChoice(restart, smoke bool, confirm func(context.Context, []backend.DSHProcess) (externalDSHChoice, error)) func(context.Context, []backend.DSHProcess) (externalDSHChoice, error) {
+	if !restart && !smoke {
+		return confirm
+	}
+	// Restart owns only our child. Automated smoke runs must also preserve
+	// external instances and must never wait for a human in a modal dialog.
+	return func(ctx context.Context, _ []backend.DSHProcess) (externalDSHChoice, error) {
+		return externalDSHOtherPort, ctx.Err()
+	}
 }

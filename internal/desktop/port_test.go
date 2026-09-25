@@ -24,6 +24,31 @@ func TestLoopbackURL(t *testing.T) {
 	}
 }
 
+func TestAutomatedAndRestartLaunchesNeverPromptOrStopExternalDSH(t *testing.T) {
+	for _, restart := range []bool{false, true} {
+		for _, smoke := range []bool{false, true} {
+			t.Run(fmt.Sprintf("restart=%t/smoke=%t", restart, smoke), func(t *testing.T) {
+				prompted := false
+				choose := externalDSHLaunchChoice(restart, smoke, func(context.Context, []backend.DSHProcess) (externalDSHChoice, error) {
+					prompted = true
+					return externalDSHCancel, nil
+				})
+				choice, err := choose(context.Background(), []backend.DSHProcess{{PID: 123}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if restart || smoke {
+					if prompted || choice != externalDSHOtherPort {
+						t.Fatalf("automated launch prompted=%t, choice=%v", prompted, choice)
+					}
+				} else if !prompted || choice != externalDSHCancel {
+					t.Fatal("normal initial launch bypassed user confirmation")
+				}
+			})
+		}
+	}
+}
+
 func TestLaunchPreparationChecksProcessesBeforePorts(t *testing.T) {
 	for _, choice := range []externalDSHChoice{externalDSHKill, externalDSHOtherPort} {
 		t.Run(fmt.Sprint(choice), func(t *testing.T) {

@@ -121,7 +121,16 @@ jobs:
           CGO_ENABLED: 0
 
       - name: Build application
+        timeout-minutes: 15
         run: bun run build.ts ${{ inputs.smoke-test && '--smoke-test' || '' }}
+
+      - name: Upload diagnostics
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}-diagnostics
+          path: dist/intermediate/**/smoke-launcher.log
+          if-no-files-found: ignore
 
       - name: Upload application
         uses: actions/upload-artifact@v7
