@@ -48,6 +48,7 @@ func TestPageZoomWebView(t *testing.T) {
 }
 
 type zoomMetrics struct {
+	Visibility                                               string
 	Width, Height, BodyWidth, AppHeight, FooterBottom, Scale float64
 	BadgeRight, BadgeBottom, BadgeWidth, Opacity             float64
 	Label                                                    string
@@ -83,7 +84,12 @@ func runZoomWebViewTest() error {
 			}
 		},
 	})
-	window := app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "main", URL: "/", Width: 800, Height: 560})
+	// WebKit pauses its animation timeline when another window fully covers
+	// this fixture. Keep only the opt-in test window above other applications;
+	// otherwise a running Go timer is not evidence that CSS animation advanced.
+	window := app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Name: "main", URL: "/", Width: 800, Height: 560, AlwaysOnTop: true,
+	})
 	zoom := newPageZoom(window, log.New(os.Stderr, "", 0))
 	zoom.bind(app, window)
 	manager := &windowManager{window: window, zoom: zoom}
@@ -126,7 +132,8 @@ func checkZoomWebView(window *application.WebviewWindow, app *application.App, z
             badgeRight: viewport.offsetLeft + viewport.width - rect.right,
             badgeBottom: viewport.offsetTop + viewport.height - rect.bottom,
             badgeWidth: rect.width, opacity: Number(getComputedStyle(label).opacity),
-            label: label.textContent, visible: badge.hasAttribute('data-visible')
+            label: label.textContent, visible: badge.hasAttribute('data-visible'),
+            visibility: document.visibilityState
           }));
         })()`)
 		return <-samples
@@ -223,6 +230,7 @@ func checkZoomWebView(window *application.WebviewWindow, app *application.App, z
 		key     string
 		percent int
 	}{
+		{"Cmd+plus", 110}, {"Cmd+-", 100},
 		{"Ctrl+plus", 110}, {"Cmd+=", 120},
 		{"Ctrl+-", 110}, {"Cmd+-", 100},
 	} {

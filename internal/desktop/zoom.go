@@ -48,10 +48,10 @@ func (zoom *pageZoom) keyBindings() map[string]func(application.Window) {
 func (zoom *pageZoom) keyBindingsForOS(goos string) map[string]func(application.Window) {
 	in := func(application.Window) { zoom.change(1) }
 	out := func(application.Window) { zoom.change(-1) }
-	modifiers := []string{"CmdOrCtrl"}
+	modifiers := []string{"Ctrl"}
 	if goos == "darwin" {
-		// CmdOrCtrl means Command on macOS. Also accept literal Control there.
-		modifiers = append(modifiers, "Ctrl")
+		// Command is the macOS shortcut; keep the existing Control aliases.
+		modifiers = []string{"Cmd", "Ctrl"}
 	}
 	bindings := make(map[string]func(application.Window))
 	for _, modifier := range modifiers {
