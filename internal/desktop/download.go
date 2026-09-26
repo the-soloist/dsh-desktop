@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,64 +24,9 @@ const downloadMessageType = "dsh-desktop-download"
 // Session export client. Wails v3 does not expose a native download callback
 // consistently across WebKit, WebView2, and WebKitGTK, so the URL is handed to
 // the Go side through the platform message bridge instead.
-const downloadInterceptorScript = `(function () {
-  if (window.__dshDesktopDownloadInterceptor) return;
-  window.__dshDesktopDownloadInterceptor = true;
-
-  function send(payload) {
-    try {
-      if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
-        window.chrome.webview.postMessage(payload);
-        return true;
-      }
-      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.external) {
-        window.webkit.messageHandlers.external.postMessage(payload);
-        return true;
-      }
-      if (window._wails && typeof window._wails.invoke === "function") {
-        window._wails.invoke(payload);
-        return true;
-      }
-    } catch (_) {}
-    return false;
-  }
-
-  function intercept(anchor) {
-    if (!anchor || !anchor.hasAttribute("download")) return false;
-    var href = anchor.href;
-    if (!href) return false;
-    var destination;
-    try {
-      destination = new URL(href, window.location.href);
-    } catch (_) {
-      return false;
-    }
-    if (destination.origin !== window.location.origin) return false;
-    var message = JSON.stringify({
-      type: "dsh-desktop-download",
-      url: destination.href,
-      filename: anchor.download || ""
-    });
-    return send(message);
-  }
-
-  // DSH creates the export anchor without appending it to document, so a
-  // document click listener alone cannot observe anchor.click().
-  var originalAnchorClick = HTMLAnchorElement.prototype.click;
-  HTMLAnchorElement.prototype.click = function () {
-    if (intercept(this)) return;
-    return originalAnchorClick.call(this);
-  };
-
-  document.addEventListener("click", function (event) {
-    var target = event.target;
-    var anchor = target && typeof target.closest === "function" ? target.closest("a[download]") : null;
-    if (intercept(anchor)) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-    }
-  }, true);
-})();`
+//
+//go:embed download.js
+var downloadInterceptorScript string
 
 type desktopDownloadRequest struct {
 	Type     string `json:"type"`
@@ -170,28 +116,32 @@ func (controller *controller) downloadFile(window application.Window, request de
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
-	requestWithContext, err := http.NewRequestWithContext(ctx, http.MethodGet, destinationURL.String(), nil)
-	if err != nil {
-		controller.reportDownloadError(window, fmt.Errorf("创建下载请求: %w", err))
-		return
-	}
-	client := &http.Client{Transport: &http.Transport{Proxy: nil}}
-	response, err := client.Do(requestWithContext)
-	if err != nil {
-		controller.reportDownloadError(window, fmt.Errorf("下载文件: %w", err))
-		return
-	}
-	defer response.Body.Close()
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
-		controller.reportDownloadError(window, fmt.Errorf("下载文件: DSH 返回 HTTP %d", response.StatusCode))
-		return
-	}
-	if err := writeDownloadFile(destination, response.Body); err != nil {
+	if err := downloadToFile(ctx, destinationURL.String(), destination); err != nil {
 		controller.reportDownloadError(window, err)
 		return
 	}
 	controller.logger.Printf("[download] saved %s", destination)
+}
+
+// downloadToFile owns the HTTP and filesystem work independently of the native
+// save dialog, so the same download path can be exercised without a GUI.
+func downloadToFile(ctx context.Context, sourceURL, destination string) error {
+	requestWithContext, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
+	if err != nil {
+		return fmt.Errorf("创建下载请求: %w", err)
+	}
+	client := &http.Client{Transport: &http.Transport{Proxy: nil}}
+	defer client.CloseIdleConnections()
+	response, err := client.Do(requestWithContext)
+	if err != nil {
+		return fmt.Errorf("下载文件: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+		return fmt.Errorf("下载文件: DSH 返回 HTTP %d", response.StatusCode)
+	}
+	return writeDownloadFile(destination, response.Body)
 }
 
 func writeDownloadFile(destination string, source io.Reader) error {

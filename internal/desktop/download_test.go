@@ -1,12 +1,16 @@
 package desktop
 
 import (
+	"context"
+	"errors"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type failingDownloadReader struct{}
@@ -70,65 +74,130 @@ func TestWriteDownloadFileStreamsAndReplacesDestination(t *testing.T) {
 }
 
 func TestWriteDownloadFileRemovesPartialFileOnReadError(t *testing.T) {
-	directory := t.TempDir()
-	destination := filepath.Join(directory, "failed.zip")
-	if err := writeDownloadFile(destination, failingDownloadReader{}); err == nil {
-		t.Fatal("writeDownloadFile() succeeded for a failing reader")
-	}
-	if _, err := os.Stat(destination); !os.IsNotExist(err) {
-		t.Fatalf("destination exists after failed download: %v", err)
+	for _, existing := range []bool{false, true} {
+		name := "new destination"
+		if existing {
+			name = "existing destination"
+		}
+		t.Run(name, func(t *testing.T) {
+			directory := t.TempDir()
+			destination := filepath.Join(directory, "failed.zip")
+			if existing {
+				if err := os.WriteFile(destination, []byte("keep original"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			partial := strings.NewReader("partial archive bytes")
+			source := io.MultiReader(partial, failingDownloadReader{})
+			if err := writeDownloadFile(destination, source); !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Fatalf("writeDownloadFile() error = %v, want read failure", err)
+			}
+			if partial.Len() != 0 {
+				t.Fatal("fixture did not exercise a partial write")
+			}
+			wantEntries := 0
+			if existing {
+				wantEntries = 1
+				assertDownloadContents(t, destination, "keep original")
+			} else if _, err := os.Stat(destination); !os.IsNotExist(err) {
+				t.Fatalf("destination exists after failed download: %v", err)
+			}
+			entries, err := os.ReadDir(directory)
+			if err != nil || len(entries) != wantEntries {
+				t.Fatalf("temporary download files remain: %v, %v", entries, err)
+			}
+		})
 	}
 }
 
-func TestDownloadEndpointCanBeFetchedThroughHTTPClient(t *testing.T) {
+func TestDownloadToFileUsesAuthenticatedProxy(t *testing.T) {
+	var requests atomic.Int32
 	server := newIPv4TestServer(t, http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodGet || request.URL.Path != "/api/session.export" {
-			t.Fatalf("request = %s %s", request.Method, request.URL.Path)
+		requests.Add(1)
+		if request.Method != http.MethodGet || request.URL.RequestURI() != "/api/session.export?id=session-1" {
+			t.Errorf("request = %s %s", request.Method, request.URL)
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if cookie, err := request.Cookie("dsh-auth-test"); err != nil || cookie.Value != "download-session" {
+			t.Errorf("download authentication = %v, %v", cookie, err)
+			response.WriteHeader(http.StatusUnauthorized)
+			return
 		}
 		response.Header().Set("Content-Disposition", `attachment; filename="session.zip"`)
 		_, _ = response.Write([]byte("zip bytes"))
 	}))
-	request, err := http.NewRequest(http.MethodGet, server.URL+"/api/session.export", nil)
+	proxy, err := newDSHAuthenticationProxy(server.URL, &http.Cookie{Name: "dsh-auth-test", Value: "download-session"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := (&http.Client{}).Do(request)
-	if err != nil {
+	t.Cleanup(func() { _ = proxy.Close() })
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	destination := filepath.Join(t.TempDir(), "session.zip")
+	if err := downloadToFile(ctx, proxy.URL()+"/api/session.export?id=session-1", destination); err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d", response.StatusCode)
+	if requests.Load() != 1 {
+		t.Fatalf("download request count = %d, want 1", requests.Load())
 	}
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(body) != "zip bytes" {
-		t.Fatalf("body = %q", body)
+	assertDownloadContents(t, destination, "zip bytes")
+}
+
+func TestDownloadToFilePreservesDestinationOnFailure(t *testing.T) {
+	for _, failure := range []string{"HTTP error", "truncated body", "cancelled"} {
+		t.Run(failure, func(t *testing.T) {
+			var requests atomic.Int32
+			server := newIPv4TestServer(t, http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				requests.Add(1)
+				if failure == "HTTP error" {
+					response.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				response.Header().Set("Content-Length", "100")
+				_, _ = response.Write([]byte("incomplete archive"))
+			}))
+			directory := t.TempDir()
+			destination := filepath.Join(directory, "session.zip")
+			if err := os.WriteFile(destination, []byte("original archive"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			if failure == "cancelled" {
+				cancel()
+			}
+			err := downloadToFile(ctx, server.URL+"/api/session.export", destination)
+			switch failure {
+			case "HTTP error":
+				if err == nil || !strings.Contains(err.Error(), "HTTP 401") {
+					t.Fatalf("expected HTTP failure, got %v", err)
+				}
+			case "truncated body":
+				if !errors.Is(err, io.ErrUnexpectedEOF) {
+					t.Fatalf("expected truncated download, got %v", err)
+				}
+			case "cancelled":
+				if !errors.Is(err, context.Canceled) || requests.Load() != 0 {
+					t.Fatalf("cancellation: requests=%d, err=%v", requests.Load(), err)
+				}
+			}
+			assertDownloadContents(t, destination, "original archive")
+			entries, err := os.ReadDir(directory)
+			if err != nil || len(entries) != 1 || entries[0].Name() != "session.zip" {
+				t.Fatalf("unexpected files after failure: %v, %v", entries, err)
+			}
+		})
 	}
 }
 
-func TestDownloadInterceptorUsesDetachedAnchorClickPath(t *testing.T) {
-	if !strings.Contains(downloadInterceptorScript, "originalAnchorClick.call(this)") {
-		t.Fatal("download interceptor does not preserve ordinary anchor.click()")
+func assertDownloadContents(t *testing.T, path, want string) {
+	t.Helper()
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(downloadInterceptorScript, "anchor.download || \"\"") {
-		t.Fatal("download interceptor does not forward the requested filename")
-	}
-}
-
-func TestDownloadInterceptorScriptHasNativeBridgeAndCancellation(t *testing.T) {
-	for _, fragment := range []string{
-		"a[download]",
-		"HTMLAnchorElement.prototype.click",
-		"preventDefault",
-		"chrome.webview.postMessage",
-		"webkit.messageHandlers.external",
-		"dsh-desktop-download",
-	} {
-		if !strings.Contains(downloadInterceptorScript, fragment) {
-			t.Errorf("download interceptor script is missing %q", fragment)
-		}
+	if string(contents) != want {
+		t.Fatalf("download contents = %q, want %q", contents, want)
 	}
 }

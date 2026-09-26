@@ -53,7 +53,7 @@ jobs:
           mkdir -p dist/intermediate
           bun build build.ts --target=bun --outfile=dist/intermediate/build-validation.js
 
-      - name: Test | Startup UI
+      - name: Test | Frontend
         run: bun test tests
 
   build:
