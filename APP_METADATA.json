@@ -1,7 +1,7 @@
 {
   "displayName": "DSH Desktop",
   "internalName": "DshDesktop",
-  "description": "Desktop client for DeepSeek DSH",
+  "description": "DSH Desktop",
   "bundleIdentifier": "io.github.the-soloist.dsh-desktop",
   "linuxDesktopId": "dshdesktop",
   "dshPackage": "@deepseek-ai/dsh",
