@@ -38,6 +38,9 @@ func (zoom *pageZoom) bind(app *application.App, window *application.WebviewWind
 	for key, callback := range zoom.keyBindings() {
 		window.RegisterKeyBinding(key, callback)
 	}
+	if runtime.GOOS == "windows" {
+		zoom.bindWindowsKeys(app.KeyBinding, window)
+	}
 	bindNativeZoomMenu(app, zoom)
 }
 
