@@ -36,7 +36,7 @@ type desktopDownloadRequest struct {
 
 var errDownloadOriginNotAllowed = errors.New("download request did not originate from the active DSH page")
 
-func (controller *controller) handleRawMessage(window application.Window, message string, originInfo *application.OriginInfo) {
+func (controller *controller) handleDownloadMessage(window application.Window, message string, originInfo *application.OriginInfo) {
 	var request desktopDownloadRequest
 	if err := json.Unmarshal([]byte(message), &request); err != nil || request.Type != downloadMessageType {
 		return
@@ -68,29 +68,10 @@ func (controller *controller) validateDownloadRequest(window application.Window,
 		return errDownloadOriginNotAllowed
 	}
 
-	controller.proxyMu.Lock()
-	proxy := controller.authenticationProxy
-	controller.proxyMu.Unlock()
-	expectedOrigin := controller.backend.URL()
-	if proxy != nil {
-		expectedOrigin = proxy.URL()
-	}
-	if !sameHTTPOrigin(destination.String(), expectedOrigin) {
-		return errDownloadOriginNotAllowed
-	}
-	if originInfo != nil && strings.TrimSpace(originInfo.Origin) != "" && !sameHTTPOrigin(originInfo.Origin, expectedOrigin) {
+	if !allowedPageMessageOrigin(window, destination.String(), controller.activePageOrigin(), originInfo) {
 		return errDownloadOriginNotAllowed
 	}
 	return nil
-}
-
-func sameHTTPOrigin(first, second string) bool {
-	left, leftErr := url.Parse(first)
-	right, rightErr := url.Parse(second)
-	if leftErr != nil || rightErr != nil || left.Scheme == "" || right.Scheme == "" {
-		return false
-	}
-	return strings.EqualFold(left.Scheme, right.Scheme) && strings.EqualFold(left.Host, right.Host)
 }
 
 func (controller *controller) downloadFile(window application.Window, request desktopDownloadRequest) {

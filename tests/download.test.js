@@ -4,7 +4,9 @@ import { runInNewContext } from "node:vm";
 
 // Execute the same file embedded in the application. Only the browser/bridge
 // boundaries are faked; the interception logic itself is not reimplemented.
-const script = readFileSync(new URL("../internal/desktop/download.js", import.meta.url), "utf8");
+const script = ["bridge.js", "download.js"].map((name) =>
+  readFileSync(new URL(`../internal/desktop/${name}`, import.meta.url), "utf8")
+).join("\n");
 
 function browser(bridge = "windows") {
   const location = new URL("http://127.0.0.1:43210/session");

@@ -2,24 +2,6 @@
   if (window.__dshDesktopDownloadInterceptor) return;
   window.__dshDesktopDownloadInterceptor = true;
 
-  function send(payload) {
-    try {
-      if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
-        window.chrome.webview.postMessage(payload);
-        return true;
-      }
-      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.external) {
-        window.webkit.messageHandlers.external.postMessage(payload);
-        return true;
-      }
-      if (window._wails && typeof window._wails.invoke === "function") {
-        window._wails.invoke(payload);
-        return true;
-      }
-    } catch (_) {}
-    return false;
-  }
-
   function intercept(anchor) {
     if (!anchor || !anchor.hasAttribute("download")) return false;
     var href = anchor.href;
@@ -36,7 +18,8 @@
       url: destination.href,
       filename: anchor.download || ""
     });
-    return send(message);
+    var bridge = window.__dshDesktopBridge;
+    return !!bridge && bridge.send(message);
   }
 
   // DSH creates the export anchor without appending it to document, so a

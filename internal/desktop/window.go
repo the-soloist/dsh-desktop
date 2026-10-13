@@ -51,7 +51,7 @@ func newWindowManager(app *application.App, store *windowstate.Store, title stri
 
 func (manager *windowManager) bindPageEnhancements() {
 	install := func(*application.WindowEvent) {
-		manager.window.ExecJS(downloadInterceptorScript)
+		manager.window.ExecJS(desktopBridgeScript + clipboardInterceptorScript + downloadInterceptorScript)
 		manager.zoom.restore()
 	}
 	manager.window.OnWindowEvent(events.Mac.WebViewDidFinishNavigation, install)
