@@ -15,12 +15,28 @@ export async function buildMacOS(context: BuildContext): Promise<void> {
   const packagedBinary = path.join(macOSDirectory, context.metadata.displayName);
   const icon = path.join(resourcesDirectory, `${context.metadata.displayName}.icns`);
 
-  await buildGoBinary(context, binary, {
-    CGO_ENABLED: "1",
-    CGO_CFLAGS: "-mmacosx-version-min=13.0",
-    CGO_LDFLAGS: "-mmacosx-version-min=13.0",
-    MACOSX_DEPLOYMENT_TARGET: "13.0",
-  });
+  const targets = [
+    { goArch: "amd64", nativeArch: "x86_64" },
+    { goArch: "arm64", nativeArch: "arm64" },
+  ];
+  const slices: string[] = [];
+  for (const target of targets) {
+    const slice = path.join(context.intermediate, `dsh-desktop-gui-${target.nativeArch}`);
+    await buildGoBinary(context, slice, {
+      GOOS: "darwin",
+      GOARCH: target.goArch,
+      CC: "clang",
+      CGO_ENABLED: "1",
+      CGO_CFLAGS: `-arch ${target.nativeArch} -mmacosx-version-min=13.0`,
+      CGO_LDFLAGS: `-arch ${target.nativeArch} -mmacosx-version-min=13.0`,
+      MACOSX_DEPLOYMENT_TARGET: "13.0",
+    });
+    slices.push(slice);
+  }
+  await run("lipo", ["-create", ...slices, "-output", binary]);
+  for (const target of targets) {
+    await run("lipo", [binary, "-verify_arch", target.nativeArch]);
+  }
   await mkdir(macOSDirectory, { recursive: true });
   await mkdir(resourcesDirectory, { recursive: true });
   await copyFile(binary, packagedBinary);
@@ -32,7 +48,7 @@ export async function buildMacOS(context: BuildContext): Promise<void> {
   );
   await writeFile(path.join(contents, "Info.plist"), macOSInfoPlist(context.metadata, context.version), "utf8");
   await run("codesign", ["--force", "--deep", "--sign", "-", bundle]);
-  await run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", bundle]);
+  await run("codesign", ["--verify", "--all-architectures", "--deep", "--strict", "--verbose=2", bundle]);
   await createAndVerifyArchive(context.archivePath, context.platformOutput, bundleName);
   if (context.smokeTest) {
     await runSmokeTest(context, packagedBinary);

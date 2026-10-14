@@ -28,7 +28,7 @@ export interface BuildContext {
   metadata: ApplicationMetadata;
   version: string;
   platform: PlatformName;
-  architecture: Architecture;
+  architecture: Architecture | "universal";
   smokeTest: boolean;
 }
 
@@ -42,8 +42,9 @@ export function createBuildContext(arguments_: string[]): BuildContext {
   const metadata = validateMetadata(metadataDocument);
   const version = parseApplicationVersion(embeddedVersion);
   const platform = resolvePlatform();
-  const architecture = resolveArchitecture();
-  validateNativeTarget(platform, architecture);
+  const nativeArchitecture = resolveArchitecture();
+  validateNativeTarget(platform, nativeArchitecture);
+  const architecture = platform === "macos" ? "universal" : nativeArchitecture;
   const repositoryRoot = path.resolve(import.meta.dir, "../..");
   const distRoot = path.join(repositoryRoot, "dist");
   const platformOutput = path.join(distRoot, platform);

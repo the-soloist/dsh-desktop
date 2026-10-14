@@ -177,7 +177,12 @@ type apiAsset struct {
 
 // AssetName returns the release artifact name used by the build workflow.
 func AssetName(platform, arch string) string {
-	return fmt.Sprintf("DSH-Desktop-%s-%s.7z", releasePlatform(platform), releaseArch(arch))
+	platform = releasePlatform(platform)
+	architecture := releaseArch(arch)
+	if platform == "macos" {
+		architecture = "universal"
+	}
+	return fmt.Sprintf("DSH-Desktop-%s-%s.7z", platform, architecture)
 }
 
 func releasePlatform(platform string) string {

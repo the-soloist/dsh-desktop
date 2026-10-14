@@ -19,16 +19,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-15-intel
-            platform: macOS
-            arch: x86_64
-            artifact: DSH-Desktop-macos-x86_64
-            path: dist/macos/DSH-Desktop-macos-x86_64.7z
           - os: macos-latest
             platform: macOS
-            arch: arm64
-            artifact: DSH-Desktop-macos-arm64
-            path: dist/macos/DSH-Desktop-macos-arm64.7z
+            arch: universal
+            artifact: DSH-Desktop-macos-universal
+            path: dist/macos/DSH-Desktop-macos-universal.7z
           - os: ubuntu-latest
             platform: Linux
             arch: x86_64
@@ -67,6 +62,8 @@ jobs:
           command -v bun
           command -v bunx
           command -v node
+          command -v clang
+          command -v lipo
           command -v codesign
           command -v 7z || command -v 7zz
 

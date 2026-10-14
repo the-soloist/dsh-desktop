@@ -15,8 +15,8 @@ func TestAssetNameNormalisesRuntimeValues(t *testing.T) {
 		arch     string
 		want     string
 	}{
-		{platform: "darwin", arch: "amd64", want: "DSH-Desktop-macos-x86_64.7z"},
-		{platform: "macOS", arch: "aarch64", want: "DSH-Desktop-macos-arm64.7z"},
+		{platform: "darwin", arch: "amd64", want: "DSH-Desktop-macos-universal.7z"},
+		{platform: "macOS", arch: "aarch64", want: "DSH-Desktop-macos-universal.7z"},
 		{platform: "windows", arch: "x64", want: "DSH-Desktop-windows-x86_64.7z"},
 		{platform: "linux", arch: "amd64", want: "DSH-Desktop-linux-x86_64.7z"},
 	}
@@ -93,6 +93,38 @@ func TestClientCheckPicksCompatibleLatestRelease(t *testing.T) {
 	}
 	if release.Version != "0.3.0" || release.AssetName != "DSH-Desktop-linux-x86_64.7z" || release.DownloadURL != server.URL+"/download" {
 		t.Fatalf("release = %+v", release)
+	}
+}
+
+func TestClientCheckPicksMacOSUniversalRelease(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{
+  "tag_name": "v0.3.0",
+  "assets": [
+    {"name": "DSH-Desktop-macos-x86_64.7z", "browser_download_url": "https://example.invalid/intel"},
+    {"name": "DSH-Desktop-macos-arm64.7z", "browser_download_url": "https://example.invalid/arm"},
+    {"name": "DSH-Desktop-macos-universal.7z", "browser_download_url": "https://example.invalid/universal"}
+  ]
+}`))
+	}))
+	defer server.Close()
+	client, err := NewClient(DefaultRepository, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, arch := range []string{"amd64", "arm64"} {
+		t.Run(arch, func(t *testing.T) {
+			release, err := client.WithPlatform("darwin", arch).Check(context.Background(), "0.2.2")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if release == nil {
+				t.Fatal("expected a compatible universal update")
+			}
+			if release.AssetName != "DSH-Desktop-macos-universal.7z" || release.DownloadURL != "https://example.invalid/universal" {
+				t.Fatalf("expected the universal asset for %s, got %+v", arch, release)
+			}
+		})
 	}
 }
 
