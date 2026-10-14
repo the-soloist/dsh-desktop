@@ -45,12 +45,8 @@ type controller struct {
 	authenticationProxy  *dshAuthenticationProxy
 	downloadMu           sync.Mutex
 	updateClient         *releaseupdate.Client
-	updateSchedule       *releaseupdate.Schedule
 	updateCheckMu        sync.Mutex
-	updateLifecycleMu    sync.Mutex
 	updateDialogMu       sync.Mutex
-	updateCancel         context.CancelFunc
-	updateDone           chan struct{}
 	smokeMu              sync.Mutex
 	smokeErr             error
 }
@@ -67,14 +63,6 @@ func newController(
 	updateClient, updateErr := releaseupdate.NewClient(releaseupdate.DefaultRepository, "", nil)
 	if updateErr != nil {
 		logger.Printf("[update] cannot configure GitHub Releases client: %v", updateErr)
-	}
-	updateSchedulePath, scheduleErr := releaseupdate.Path(metadata.InternalName)
-	if scheduleErr != nil {
-		logger.Printf("[update] cannot resolve check schedule path: %v", scheduleErr)
-	}
-	var updateSchedule *releaseupdate.Schedule
-	if scheduleErr == nil {
-		updateSchedule = releaseupdate.NewSchedule(updateSchedulePath, updateCheckInterval)
 	}
 	profilePath, profileErr := profile.Path(metadata.InternalName)
 	if profileErr != nil {
@@ -93,7 +81,6 @@ func newController(
 		startupConsoleOwned: startupConsoleOwned,
 		pendingIntent:       startupIntentInitial,
 		updateClient:        updateClient,
-		updateSchedule:      updateSchedule,
 	}
 }
 
@@ -127,7 +114,6 @@ func (controller *controller) bind() {
 		}
 		controller.window.ensureVisible()
 		controller.window.show()
-		controller.startUpdateChecks()
 		if smokeTestEnabled() {
 			controller.logger.Printf("[smoke] starting DSH without waiting for the startup frontend")
 			controller.startPendingService()
@@ -238,7 +224,6 @@ func (controller *controller) quit() {
 func (controller *controller) shutdown() {
 	controller.quitting.Store(true)
 	controller.cancelService()
-	controller.stopUpdateChecks()
 	controller.closeAuthenticationProxy()
 	controller.service.set(serviceQuitting)
 	if err := controller.window.store.Save(); err != nil {
