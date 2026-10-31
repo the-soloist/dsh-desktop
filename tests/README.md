@@ -8,7 +8,7 @@ bun test tests
 CGO_ENABLED=0 go test -tags server ./...
 ```
 
-macOS 原生回归测试会打开临时窗口，使用临时状态文件：
+macOS 原生回归测试会打开临时窗口，使用临时状态文件。窗口测试先读取屏幕工作区的逻辑尺寸，再生成两组可容纳的尺寸，复用于调整大小、重新打开及最大化恢复测试；日志包含屏幕、缩放倍率和预期尺寸：
 
 ```sh
 go test -tags windowstatetest,layouttest ./internal/desktop -run 'TestNativeWindowState|TestLayoutWebView' -v
