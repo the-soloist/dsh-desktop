@@ -82,7 +82,7 @@ func (controller *controller) runServiceAction(restart bool) {
 			dshenv.EnvironmentValue(runtimeEnvironment.Environment, "TEMP"),
 		)
 	}
-	controller.setStartupStatus(startupVersion, "正在获取 DSH 版本", "正在从 npm registry 查询最新可用版本（跳过 alpha）…")
+	controller.setStartupStatus(startupVersion, "正在获取 DSH 版本", "正在从 npm registry 查询最新可用RC版本")
 	registryClient, err := npmregistry.NewClient(runtimeEnvironment.RegistryURL, nil)
 	if err != nil {
 		controller.showStartupFailure("npm registry 配置无效。", err)
