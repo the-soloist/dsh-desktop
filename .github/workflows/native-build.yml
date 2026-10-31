@@ -117,6 +117,12 @@ jobs:
         env:
           CGO_ENABLED: 0
 
+      - name: Test UI state | macOS
+        if: runner.os == 'macOS'
+        run: |
+          bun install --frozen-lockfile
+          go test -count=1 -tags windowstatetest,layouttest ./internal/desktop -run 'TestNativeWindowState|TestLayoutWebView' -v
+
       - name: Build application
         timeout-minutes: 15
         run: bun run build.ts ${{ inputs.smoke-test && '--smoke-test' || '' }}

@@ -19,6 +19,7 @@ import (
 type controller struct {
 	app                  *application.App
 	window               *windowManager
+	layout               *layoutBridge
 	backend              *backend.Supervisor
 	profiles             *profile.Manager
 	actionMu             sync.Mutex
@@ -55,6 +56,7 @@ func newController(
 	app *application.App,
 	window *windowManager,
 	supervisor *backend.Supervisor,
+	preferences layoutPreferenceStore,
 	metadata dshdesktop.Metadata,
 	logger *log.Logger,
 	startupConsoleOwned bool,
@@ -71,6 +73,7 @@ func newController(
 	return &controller{
 		app:                 app,
 		window:              window,
+		layout:              &layoutBridge{preferences: preferences, logger: logger},
 		backend:             supervisor,
 		profiles:            profile.New(profilePath),
 		metadata:            metadata,
@@ -112,7 +115,6 @@ func (controller *controller) bind() {
 		if controller.startupConsoleOwned {
 			hideStartupConsole()
 		}
-		controller.window.ensureVisible()
 		controller.window.show()
 		if smokeTestEnabled() {
 			controller.logger.Printf("[smoke] starting DSH without waiting for the startup frontend")
@@ -226,9 +228,7 @@ func (controller *controller) shutdown() {
 	controller.cancelService()
 	controller.closeAuthenticationProxy()
 	controller.service.set(serviceQuitting)
-	if err := controller.window.store.Save(); err != nil {
-		controller.logger.Printf("[app] cannot save window state during shutdown: %v", err)
-	}
+	controller.window.save()
 	if err := controller.backend.Close(); err != nil {
 		controller.logger.Printf("[dsh] cannot stop process during shutdown: %v", err)
 		controller.recordSmokeFailure(err)

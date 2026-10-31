@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // Logger is the minimal logging contract used by Store.
@@ -16,12 +17,20 @@ type Logger interface {
 
 // State is the persisted normal window geometry.
 type State struct {
-	X           int  `json:"x"`
-	Y           int  `json:"y"`
-	Width       int  `json:"width"`
-	Height      int  `json:"height"`
-	Maximised   bool `json:"maximised"`
-	HasPosition bool `json:"hasPosition"`
+	X           int    `json:"x"`
+	Y           int    `json:"y"`
+	Width       int    `json:"width"`
+	Height      int    `json:"height"`
+	Maximised   bool   `json:"maximised"`
+	HasPosition bool   `json:"hasPosition"`
+	Layout      Layout `json:"layout,omitempty"`
+}
+
+// Layout contains user-selected column widths in CSS pixels. Zero means that
+// the desktop has no saved preference for that column.
+type Layout struct {
+	SidebarWidth  int `json:"sidebarWidth,omitempty"`
+	RightbarWidth int `json:"rightbarWidth,omitempty"`
 }
 
 // Bounds defines valid and fallback window dimensions.
@@ -39,6 +48,8 @@ type Store struct {
 	logger Logger
 	mu     sync.Mutex
 	state  State
+	saveMu sync.Mutex
+	timer  *time.Timer
 }
 
 // Path returns the platform-native configuration path for applicationName.
@@ -91,7 +102,15 @@ func (store *Store) Update(change func(*State)) {
 
 // Save persists the current state with owner-only permissions.
 func (store *Store) Save() error {
-	state := store.Snapshot()
+	store.saveMu.Lock()
+	defer store.saveMu.Unlock()
+	store.mu.Lock()
+	if store.timer != nil {
+		store.timer.Stop()
+		store.timer = nil
+	}
+	state := store.state
+	store.mu.Unlock()
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
@@ -99,7 +118,34 @@ func (store *Store) Save() error {
 	if err = os.MkdirAll(filepath.Dir(store.path), 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(store.path, append(data, '\n'), 0o600)
+	temporary, err := os.CreateTemp(filepath.Dir(store.path), ".window-state-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(temporary.Name())
+	if _, err = temporary.Write(append(data, '\n')); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err = temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporary.Name(), store.path)
+}
+
+// SaveSoon coalesces move/resize bursts while keeping completed changes on disk
+// independently of the application's exit path. Save flushes the latest state.
+func (store *Store) SaveSoon() {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.timer != nil {
+		store.timer.Stop()
+	}
+	store.timer = time.AfterFunc(200*time.Millisecond, func() {
+		if err := store.Save(); err != nil {
+			store.logger.Printf("cannot save window state: %v", err)
+		}
+	})
 }
 
 func (store *Store) normalise(state State) State {
@@ -113,6 +159,12 @@ func (store *Store) normalise(state State) State {
 		state.X = 0
 		state.Y = 0
 		state.HasPosition = false
+	}
+	if state.Layout.SidebarWidth < 0 || state.Layout.SidebarWidth > MaximumColumnWidth {
+		state.Layout.SidebarWidth = 0
+	}
+	if state.Layout.RightbarWidth < 0 || state.Layout.RightbarWidth > MaximumColumnWidth {
+		state.Layout.RightbarWidth = 0
 	}
 	return state
 }

@@ -111,7 +111,7 @@ func run() error {
 	})
 	window := newWindowManager(app, stateStore, metadata.DisplayName, logger)
 	supervisor := newBackendSupervisor(metadata, logger)
-	controller := newController(app, window, supervisor, metadata, logger, startupConsoleOwned)
+	controller := newController(app, window, supervisor, stateStore, metadata, logger, startupConsoleOwned)
 	desktopController = controller
 	controller.bind()
 

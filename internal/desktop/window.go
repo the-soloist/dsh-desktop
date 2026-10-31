@@ -9,14 +9,11 @@ import (
 	"github.com/the-soloist/dsh-desktop/internal/windowstate"
 )
 
-const minimumVisibleWindowEdge = 64
-
 type windowManager struct {
-	app    *application.App
-	window *application.WebviewWindow
-	store  *windowstate.Store
-	logger *log.Logger
-	zoom   *pageZoom
+	window   *application.WebviewWindow
+	logger   *log.Logger
+	zoom     *pageZoom
+	geometry *windowGeometry
 }
 
 func newWindowManager(app *application.App, store *windowstate.Store, title string, logger *log.Logger) *windowManager {
@@ -38,20 +35,17 @@ func newWindowManager(app *application.App, store *windowstate.Store, title stri
 		options.X = initial.X
 		options.Y = initial.Y
 	}
-	if initial.Maximised {
-		options.StartState = application.WindowStateMaximised
-	}
-	manager := &windowManager{app: app, window: app.Window.NewWithOptions(options), store: store, logger: logger}
+	manager := &windowManager{window: app.Window.NewWithOptions(options), logger: logger}
 	manager.zoom = newPageZoom(manager.window, logger)
 	manager.zoom.bind(app, manager.window)
-	manager.bindGeometryEvents()
+	manager.geometry = newWindowGeometry(app, manager.window, store, initial, logger)
 	manager.bindPageEnhancements()
 	return manager
 }
 
 func (manager *windowManager) bindPageEnhancements() {
 	install := func(*application.WindowEvent) {
-		manager.window.ExecJS(desktopBridgeScript + clipboardInterceptorScript + downloadInterceptorScript)
+		manager.window.ExecJS(desktopBridgeScript + clipboardInterceptorScript + downloadInterceptorScript + layoutAdapterScript + layoutPersistenceScript)
 		manager.zoom.restore()
 	}
 	manager.window.OnWindowEvent(events.Mac.WebViewDidFinishNavigation, install)
@@ -59,74 +53,8 @@ func (manager *windowManager) bindPageEnhancements() {
 	manager.window.OnWindowEvent(events.Linux.WindowLoadFinished, install)
 }
 
-func (manager *windowManager) bindGeometryEvents() {
-	manager.window.OnWindowEvent(events.Common.WindowDidMove, func(*application.WindowEvent) {
-		manager.captureNormalGeometry()
-	})
-	manager.window.OnWindowEvent(events.Common.WindowDidResize, func(*application.WindowEvent) {
-		manager.captureNormalGeometry()
-	})
-	manager.window.OnWindowEvent(events.Common.WindowMaximise, func(*application.WindowEvent) {
-		manager.store.Update(func(state *windowstate.State) { state.Maximised = true })
-	})
-	manager.window.OnWindowEvent(events.Common.WindowUnMaximise, func(*application.WindowEvent) {
-		manager.store.Update(func(state *windowstate.State) { state.Maximised = false })
-		manager.captureNormalGeometry()
-	})
-}
-
-func (manager *windowManager) captureNormalGeometry() {
-	if manager.window.IsMaximised() || manager.window.IsMinimised() || manager.window.IsFullscreen() {
-		return
-	}
-	width, height := manager.window.Size()
-	x, y := manager.window.Position()
-	manager.store.Update(func(state *windowstate.State) {
-		state.X = x
-		state.Y = y
-		state.Width = width
-		state.Height = height
-		state.Maximised = false
-		state.HasPosition = true
-	})
-}
-
-func (manager *windowManager) ensureVisible() {
-	state := manager.store.Snapshot()
-	if !state.HasPosition || windowIntersectsScreens(state, manager.app.Screen.GetAll()) {
-		return
-	}
-	manager.logger.Printf("[window] saved position is outside connected displays; centering")
-	manager.window.Center()
-	manager.captureNormalGeometry()
-}
-
-func windowIntersectsScreens(state windowstate.State, screens []*application.Screen) bool {
-	windowRight := state.X + state.Width
-	windowBottom := state.Y + state.Height
-	for _, screen := range screens {
-		if screen == nil {
-			continue
-		}
-		area := screen.WorkArea
-		overlapWidth := min(windowRight, area.X+area.Width) - max(state.X, area.X)
-		overlapHeight := min(windowBottom, area.Y+area.Height) - max(state.Y, area.Y)
-		if overlapWidth >= minimumVisibleWindowEdge && overlapHeight >= minimumVisibleWindowEdge {
-			return true
-		}
-	}
-	return false
-}
-
 func (manager *windowManager) save() {
-	if manager.window.IsMaximised() {
-		manager.store.Update(func(state *windowstate.State) { state.Maximised = true })
-	} else {
-		manager.captureNormalGeometry()
-	}
-	if err := manager.store.Save(); err != nil {
-		manager.logger.Printf("[window] cannot save state: %v", err)
-	}
+	manager.geometry.save()
 }
 
 func (manager *windowManager) close() {

@@ -27,6 +27,8 @@ func (controller *controller) handleRawMessage(window application.Window, messag
 		controller.handleDownloadMessage(window, message, originInfo)
 	case clipboardMessageType:
 		controller.handleClipboardMessage(window, message, originInfo, controller.app.Clipboard.SetText)
+	case layoutMessageType:
+		controller.handleLayoutMessage(window, message, originInfo)
 	}
 }
 
