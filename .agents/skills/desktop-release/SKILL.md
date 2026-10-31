@@ -1,5 +1,5 @@
 ---
-name: dsh-release
+name: desktop-release
 description: 在 dsh-desktop 中按 SemVer 更新 VERSION、分组 commit、创建版本 tag 并 push。用于项目发布、semver patch/minor/major tag、创建标签并提交推送等请求；普通 commit/push 不触发版本升级。
 ---
 
@@ -9,7 +9,7 @@ description: 在 dsh-desktop 中按 SemVer 更新 VERSION、分组 commit、创�
 
 ## 范围与授权
 
-明确调用 `$dsh-release patch`（或 minor/major）表示执行完整发布流程；用户指定“只更新版本”“只打本地 tag”“不要 push”时，执行到对应边界。
+明确调用 `$desktop-release patch`（或 minor/major）表示执行完整发布流程；用户指定“只更新版本”“只打本地 tag”“不要 push”时，执行到对应边界。
 
 检查已有改动与暂存内容，只提交用户授权的发布范围。用户已明确要求 commit/tag/push 时，该范围内的版本提交无需重复确认；仅要求 tag 而仍需提交版本文件时，先说明并取得提交授权。无关改动保留原样，无法隔离时暂停，不使用 `git add .`、stash 或重置来腾空工作区。
 
