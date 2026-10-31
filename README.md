@@ -12,7 +12,7 @@ DSH Desktop 是 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/deeps
 
 - 安装 Node.js，并确保 `node` 命令可用；即使使用 `bunx` 启动，也需要 Node.js。
 - 确保 `bunx` 或 `npx` 命令可用。应用优先使用 `bunx`，未找到时回退到 `npx`，两者至少需要一个。安装 Bun 可提供 `bunx`，安装 Node.js 和 npm 可提供 `npx`。
-- 将相关命令加入 `PATH`。启动时需要访问 npm registry 查询 DSH 版本，并按需下载依赖，请确保网络可用。
+- 将相关命令加入 `PATH`。启动时从 npm registry 选择最新的非 alpha 版本，并按需下载依赖，请确保网络可用。
 
 可在终端检查：
 

@@ -55,9 +55,8 @@ func NewClient(registryURL string, httpClient *http.Client) (*Client, error) {
 	return &Client{baseURL: strings.TrimRight(parsed.String(), "/"), http: httpClient}, nil
 }
 
-// LatestVersion returns the highest published semantic version of packageName.
-// Prereleases count. The npm latest dist-tag is ignored because publishers can
-// leave it on an older channel while a newer alpha or next version exists.
+// LatestVersion returns the highest published non-alpha semantic version of
+// packageName. Dist-tags do not take precedence over higher eligible versions.
 func (client *Client) LatestVersion(ctx context.Context, packageName string) (string, error) {
 	packageName = strings.TrimSpace(packageName)
 	if packageName == "" || strings.ContainsAny(packageName, " \t\r\n") {
@@ -87,7 +86,7 @@ func (client *Client) LatestVersion(ctx context.Context, packageName string) (st
 	}
 	version, ok := highestVersion(document.Versions, document.DistTags)
 	if !ok {
-		return "", fmt.Errorf("npm registry returned no valid versions for %s", packageName)
+		return "", fmt.Errorf("npm registry returned no valid versions for %s after excluding alpha releases", packageName)
 	}
 	return version, nil
 }
@@ -105,6 +104,12 @@ func highestVersion(versions map[string]json.RawMessage, distTags map[string]str
 		}
 		parsed, err := update.ParseVersion(version)
 		if err != nil {
+			return
+		}
+		withoutBuild, _, _ := strings.Cut(version, "+")
+		_, prerelease, _ := strings.Cut(withoutBuild, "-")
+		channel, _, _ := strings.Cut(prerelease, ".")
+		if strings.EqualFold(channel, "alpha") {
 			return
 		}
 		if !found {
