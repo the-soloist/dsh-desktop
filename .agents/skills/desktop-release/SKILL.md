@@ -1,11 +1,11 @@
 ---
 name: desktop-release
-description: 在 dsh-desktop 中按 SemVer 更新 VERSION、分组 commit、创建版本 tag 并 push。用于项目发布、semver patch/minor/major tag、创建标签并提交推送等请求；普通 commit/push 不触发版本升级。
+description: 在 dsh-desktop 中按 SemVer 更新 VERSION、分组 commit，推送分支并确认 CI 成功后创建和推送版本 tag。用于项目发布、semver patch/minor/major tag、创建标签并提交推送等请求；普通 commit/push 不触发版本升级。
 ---
 
 # DSH Desktop 版本发布
 
-执行顺序：确定版本 → 更新并验证 VERSION → commit → 创建 tag → push → 核验远端。tag 必须指向包含版本更新和本次发布内容的提交。
+执行顺序：确定版本 → 更新并验证 VERSION → commit → push 分支 → 确认该提交 CI 成功 → 创建并 push tag → 核验远端。tag 必须指向包含版本更新和本次发布内容、且已通过 CI 的同一提交。
 
 ## 范围与授权
 
@@ -13,7 +13,7 @@ description: 在 dsh-desktop 中按 SemVer 更新 VERSION、分组 commit、创�
 
 检查已有改动与暂存内容，只提交用户授权的发布范围。用户已明确要求 commit/tag/push 时，该范围内的版本提交无需重复确认；仅要求 tag 而仍需提交版本文件时，先说明并取得提交授权。无关改动保留原样，无法隔离时暂停，不使用 `git add .`、stash 或重置来腾空工作区。
 
-编写或审查本 skill 本身不构成发布授权。构建、安装应用或持续监控 CI 仅在任务包含这些动作时执行。
+编写或审查本 skill 本身不构成发布授权。完整发布包含推送 tag 前等待 CI 成功；本地构建、安装应用及推送 tag 后持续监控 Release 仅在任务包含这些动作时执行。只创建本地 tag 时保留本地验证，远端 tag 发布仍须通过 CI 检查。
 
 ## 项目约定
 
@@ -77,9 +77,9 @@ Go 缓存、临时文件和构建验证输出需要自定义位置时放到 `dis
 
 逐组查看工作区与暂存差异，明确 `git add` 的文件或 hunks，然后检查暂存内容并 commit。VERSION 与所属修复同组，修复已提交时单独提交版本更新。完成后确认没有遗漏的发布内容或无关暂存，记录最终提交 OID。
 
-## 4. 创建 tag 并推送
+## 4. 推送分支并确认 CI
 
-确认 HEAD 中的 VERSION 与计划一致。以下示例使用已核实的 main/origin 和 POSIX shell；其他 shell 使用等价语法：
+确认 HEAD 中的 VERSION 与计划一致，记录其精确 OID。以下示例使用已核实的 main/origin 和 POSIX shell；其他 shell 使用等价语法：
 
 ```sh
 set -e
@@ -87,22 +87,54 @@ release_version="$(tr -d '[:space:]' < VERSION)"
 release_tag="v${release_version}"
 release_commit="$(git rev-parse HEAD)"
 test "$(git show HEAD:VERSION | tr -d '[:space:]')" = "$release_version"
+git push origin main
+git ls-remote origin refs/heads/main
+gh run list --workflow ci.yml --branch main --event push --commit "$release_commit" \
+  --limit 20 --json databaseId,attempt,headSha,event,headBranch,status,conclusion,url
+```
+
+先确认远端 main 指向 `release_commit`。使用当前 [CI workflow](../../../.github/workflows/ci.yml) 的文件名筛选运行；若流程已改名或触发条件改变，按真实配置调整，不用其他 workflow 的绿色结果替代。
+
+选择该 SHA、分支、push 事件对应的最新运行及最新 attempt，将读取到的 run ID 记为 `ci_run`。排队或运行中时等待，不把命令退出码为零当作检查成功：
+
+```sh
+gh run watch "$ci_run" --exit-status --interval 10
+gh run view "$ci_run" --json attempt,headSha,event,headBranch,status,conclusion,jobs,url
+```
+
+放行条件必须同时满足：
+
+- 运行的 `headSha` 等于 `release_commit`，事件是目标分支的 push，且没有更新的运行或 attempt 尚待检查。
+- workflow 的 `status` 为 `completed`，`conclusion` 为 `success`。
+- 根据当前 CI 和 [原生构建矩阵](../../../.github/workflows/native-build.yml)核对所有必需 job 都完成且成功，包括质量检查、macOS Universal、Linux x86_64 和 Windows x86_64；必需 job 被跳过也不能放行。诊断上传等条件步骤的正常跳过不属于 job 失败。
+
+推送后暂未出现运行时可等待事件可见，并持续提供进度；单次工具阻塞等待不超过 60 秒。持续查不到运行、gh/API 或认证不可用时报告阻碍，保持 tag 未推送；可改用 GitHub API 或浏览器核验，但证据标准不变。
+
+失败、取消、超时、等待审批或未完成都不允许发布 tag。读取失败日志并报告，不自动重跑或制造空提交。修复已获授权时，修复后重新提交和推送，更新 `release_commit` 并等待新 SHA 的完整 CI；旧 SHA 的成功结果不能替代。
+
+## 5. 创建并推送 tag
+
+CI 成功后，再查询最新匹配运行及其 attempt，确认仍满足放行条件。重新核实本地 HEAD、远端 main 都是已验证的 `release_commit`，版本内容未变化；并发更新或新增提交时暂停，重新确定发布目标并检查相应 CI。
+
+```sh
+set -e
+test "$(git rev-parse HEAD)" = "$release_commit"
+test "$(git show HEAD:VERSION | tr -d '[:space:]')" = "$release_version"
+git ls-remote origin refs/heads/main "refs/tags/${release_tag}" "refs/tags/${release_tag}^{}"
 git tag -a "$release_tag" -m "Release $release_tag" "$release_commit"
 test "$(git rev-parse "${release_tag}^{commit}")" = "$release_commit"
 test "$(git show "${release_tag}:VERSION" | tr -d '[:space:]')" = "$release_version"
-git push --atomic origin main "refs/tags/${release_tag}"
+git push origin "refs/tags/${release_tag}"
 ```
 
-创建前要求 HEAD 就是计划发布提交，标签解引用后与该 OID 一致，标签内 VERSION 与标签名一致。恢复流程若已存在正确附注标签，直接复用，不再次创建。
+检查 ls-remote 的结果后才执行 tag 操作。恢复流程已存在正确附注标签时直接复用，不再次创建；本地 tag 指向其他提交时先报告，不擅自移动。只推送这一个 tag，不强推、镜像推送或推送全部 tags。
 
-优先原子推送，保证 main 和 tag 同时成功；不使用 force、`--mirror` 或推送全部 tags。被拒绝时检查实时远端并暂停；服务器明确不支持原子推送时，说明分步风险并获准后才改为先分支后标签。
+分支与 tag 分两阶段推送，CI 是两者之间的发布检查点。失败时保留已推送的分支及本地状态，修复或补齐证据后从同一目标继续；结果不确定先查询远端，不盲目重推、回滚分支或再次递增版本。
 
-结果不确定时，先用 ls-remote 查询两个 ref，不盲目重推或回滚。原子失败保留本地提交和 tag，下一次从同一目标继续。
-
-## 5. 核验与交付
+## 6. 核验与交付
 
 重新查询远端 main、目标 tag 和附注标签的 `^{}`，确认分支及标签指向记录的发布 OID，再查看本地工作区。普通推送不会因成功返回就证明 Release 构建已完成。
 
-gh 可用时只读查询该提交的 CI 与 Release workflow，报告实际链接及 pending/success/failure。没有取得运行状态时写明未检查；用户未要求持续监控时，不等待全部构建，也不自动重跑失败任务或改发布流程。
+提供发布前通过的 CI 运行链接、SHA 和 attempt。推送 tag 后只读查询 Release workflow，报告实际链接及 pending/success/failure；用户未要求持续监控时不等待 Release 完成，也不自动重跑失败任务或改发布流程。
 
-交付旧、新版本、修改的版本文件、各 commit、tag、远端核验和实际验证结果，并说明工作区剩余内容。仅完成版本与推送时，不声称本地已安装应用也已更新。
+交付旧、新版本、修改的版本文件、各 commit、CI 证据、tag、远端核验和实际验证结果，并说明工作区剩余内容。CI 未满足条件时明确写“分支已推送，tag 尚未推送”。仅完成版本与推送时，不声称本地已安装应用也已更新。
