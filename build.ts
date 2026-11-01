@@ -1,6 +1,7 @@
 import process from "node:process";
 import { prepareOutput } from "./scripts/build/common";
 import { createBuildContext } from "./scripts/build/config";
+import { installApplication } from "./scripts/build/install";
 import { buildLinux } from "./scripts/build/platforms/linux";
 import { buildMacOS } from "./scripts/build/platforms/macos";
 import { buildWindows } from "./scripts/build/platforms/windows";
@@ -22,3 +23,6 @@ switch (context.platform) {
 }
 
 console.log(`Package ready: ${context.archivePath}`);
+if (context.install) {
+  await installApplication(context);
+}

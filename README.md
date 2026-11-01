@@ -33,3 +33,12 @@ npx --version
 3. 可通过托盘菜单切换已有 Profile、重启 DSH 或退出应用。切换 Profile 会重启本应用管理的 DSH 服务，可能中断正在执行的任务。
 
 DSH 本身的配置与使用方式请参阅 [上游项目文档](https://github.com/deepseek-ai/deepseek-harness#readme)。
+
+## 从源码构建
+
+```sh
+bun build.ts           # 打包
+bun build.ts --install # 打包后安装，也可使用 bun build.ts install
+```
+
+安装前请完全退出应用。macOS 安装到 `/Applications/DSH Desktop.app`；Windows 安装到 `%LOCALAPPDATA%/Programs/DSH Desktop/`；Linux 安装到 `$XDG_DATA_HOME/dshdesktop/`（默认 `~/.local/share/dshdesktop/`）。覆盖前的备份保存在 `dist/install-backups/`，安装后不自动启动。

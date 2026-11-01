@@ -30,11 +30,14 @@ export interface BuildContext {
   platform: PlatformName;
   architecture: Architecture | "universal";
   smokeTest: boolean;
+  install: boolean;
 }
 
 export function createBuildContext(arguments_: string[]): BuildContext {
   const smokeTest = arguments_.includes("--smoke-test");
-  const unknownArguments = arguments_.filter((argument) => argument !== "--smoke-test");
+  const install = arguments_.includes("--install") || arguments_.includes("install");
+  const supportedArguments = new Set(["--smoke-test", "--install", "install"]);
+  const unknownArguments = arguments_.filter((argument) => !supportedArguments.has(argument));
   if (unknownArguments.length > 0) {
     throw new Error(`Unknown build arguments: ${unknownArguments.join(", ")}`);
   }
@@ -64,6 +67,7 @@ export function createBuildContext(arguments_: string[]): BuildContext {
     platform,
     architecture,
     smokeTest,
+    install,
   };
 }
 
